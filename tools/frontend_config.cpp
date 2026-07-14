@@ -30,20 +30,22 @@ std::string Lower(std::string value)
   return value;
 }
 
-std::optional<fs::path> FindDolphinControllerConfig()
+std::optional<fs::path> FindDolphinControllerConfig(std::string_view filename)
 {
   std::vector<fs::path> candidates;
   if (const char* explicit_dir = std::getenv("DOLPHIN_USER_DIR"))
   {
-    candidates.emplace_back(fs::path(explicit_dir) / "WiimoteNew.ini");
-    candidates.emplace_back(fs::path(explicit_dir) / "Config" / "WiimoteNew.ini");
+    candidates.emplace_back(fs::path(explicit_dir) / filename);
+    candidates.emplace_back(fs::path(explicit_dir) / "Config" / filename);
   }
   if (const char* home = std::getenv("HOME"))
   {
     const fs::path root(home);
-    candidates.emplace_back(root / ".var/app/org.DolphinEmu.dolphin-emu/config/dolphin-emu/WiimoteNew.ini");
-    candidates.emplace_back(root / ".config/dolphin-emu/WiimoteNew.ini");
-    candidates.emplace_back(root / ".local/share/dolphin-emu/Config/WiimoteNew.ini");
+    candidates.emplace_back(root / "Library/Application Support/Dolphin/Config" / filename);
+    candidates.emplace_back(
+        root / ".var/app/org.DolphinEmu.dolphin-emu/config/dolphin-emu" / filename);
+    candidates.emplace_back(root / ".config/dolphin-emu" / filename);
+    candidates.emplace_back(root / ".local/share/dolphin-emu/Config" / filename);
   }
   for (const fs::path& candidate : candidates)
   {
@@ -96,6 +98,66 @@ std::string NormalizeController(std::istream& input)
             "[BalanceBoard]\n";
   return output.str();
 #endif
+}
+
+bool ImportControllerFile(const fs::path& user_directory, std::string_view filename,
+                          bool normalize_wiimote, std::string* message)
+{
+  const fs::path destination = user_directory / "Config" / filename;
+  std::optional<fs::path> source = FindDolphinControllerConfig(filename);
+  if (!source && fs::is_regular_file(destination))
+    source = destination;
+  if (!source)
+  {
+    if (message)
+      *message = "no Dolphin " + std::string(filename) + " was found";
+    return false;
+  }
+
+  std::ifstream input(*source);
+  if (!input)
+  {
+    if (message)
+      *message = "can't open Dolphin controller profile " + source->string();
+    return false;
+  }
+  const std::string contents =
+      normalize_wiimote ? NormalizeController(input) :
+                          std::string(std::istreambuf_iterator<char>(input),
+                                      std::istreambuf_iterator<char>());
+  if (contents.find("Device =") == std::string::npos)
+  {
+    if (message)
+      *message = "Dolphin controller profile has no configured device: " + source->string();
+    return false;
+  }
+
+  std::error_code ec;
+  fs::create_directories(destination.parent_path(), ec);
+  if (ec)
+  {
+    if (message)
+      *message = "can't create controller config directory: " + ec.message();
+    return false;
+  }
+  std::ofstream output(destination, std::ios::trunc);
+  if (!output)
+  {
+    if (message)
+      *message = "can't write " + destination.string();
+    return false;
+  }
+  output << contents;
+  if (message)
+  {
+#ifdef MODERNGEKKO_FORCE_SIDEWAYS_WIIMOTE
+    if (normalize_wiimote)
+      *message = "imported " + source->string() + " as Sideways Wii Remote (no extension)";
+    else
+#endif
+      *message = "imported " + source->string();
+  }
+  return true;
 }
 }  // namespace
 
@@ -185,54 +247,24 @@ bool SaveConfig(const fs::path& user_directory, std::string_view resolution, std
 
 bool ImportDolphinController(const fs::path& user_directory, std::string* message)
 {
-  const fs::path destination = user_directory / "Config" / "WiimoteNew.ini";
-  std::optional<fs::path> source = FindDolphinControllerConfig();
-  if (!source && fs::is_regular_file(destination))
-    source = destination;
-  if (!source)
-  {
-    if (message)
-      *message = "no Dolphin WiimoteNew.ini was found";
-    return false;
-  }
+  std::string wiimote_message;
+  std::string gamecube_message;
+  const bool imported_wiimote =
+      ImportControllerFile(user_directory, "WiimoteNew.ini", true, &wiimote_message);
+  const bool imported_gamecube =
+      ImportControllerFile(user_directory, "GCPadNew.ini", false, &gamecube_message);
 
-  std::ifstream input(*source);
-  if (!input)
-  {
-    if (message)
-      *message = "can't open Dolphin controller profile " + source->string();
-    return false;
-  }
-  const std::string normalized = NormalizeController(input);
-  if (normalized.find("Device =") == std::string::npos)
-  {
-    if (message)
-      *message = "Dolphin controller profile has no Wiimote1 device";
-    return false;
-  }
-
-  std::error_code ec;
-  fs::create_directories(destination.parent_path(), ec);
-  if (ec)
-  {
-    if (message)
-      *message = "can't create controller config directory: " + ec.message();
-    return false;
-  }
-  std::ofstream output(destination, std::ios::trunc);
-  if (!output)
-  {
-    if (message)
-      *message = "can't write " + destination.string();
-    return false;
-  }
-  output << normalized;
   if (message)
-#ifdef MODERNGEKKO_FORCE_SIDEWAYS_WIIMOTE
-    *message = "imported " + source->string() + " as Sideways Wii Remote (no extension)";
-#else
-    *message = "imported " + source->string();
-#endif
-  return true;
+  {
+    if (imported_wiimote && imported_gamecube)
+      *message = wiimote_message + "; " + gamecube_message;
+    else if (imported_wiimote)
+      *message = wiimote_message;
+    else if (imported_gamecube)
+      *message = gamecube_message;
+    else
+      *message = wiimote_message + "; " + gamecube_message;
+  }
+  return imported_wiimote || imported_gamecube;
 }
 }  // namespace moderngekko::frontend
