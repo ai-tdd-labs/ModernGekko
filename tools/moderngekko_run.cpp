@@ -2,6 +2,7 @@
 #include "moderngekko/runtime.hpp"
 #include "frontend_config.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -214,8 +215,9 @@ int main(int argc, char** argv)
 
   std::signal(SIGINT, HandleStopSignal);
   std::signal(SIGTERM, HandleStopSignal);
-  std::jthread signal_watcher([&](std::stop_token stop_token) {
-    while (!stop_token.stop_requested())
+  std::atomic_bool stop_signal_watcher = false;
+  std::thread signal_watcher([&] {
+    while (!stop_signal_watcher.load(std::memory_order_relaxed))
     {
       if (s_stop_requested)
       {
@@ -227,7 +229,8 @@ int main(int argc, char** argv)
     }
   });
   const moderngekko::RuntimeRunResult result = created.runtime->Run();
-  signal_watcher.request_stop();
+  stop_signal_watcher.store(true, std::memory_order_relaxed);
+  signal_watcher.join();
   if (result.error)
   {
     std::cerr << "runtime failed: " << result.error->message << '\n';
