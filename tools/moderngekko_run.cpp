@@ -36,7 +36,9 @@ void Usage()
                " [--game <extracted-root>] [--module <path>]\n"
                "       [--user-dir <path>] [--title <text>]\n"
                "       [--graphics <backend>] [--audio <backend>]\n"
-               "       [-X11] [--headless] [--allow-interpreter]\n"
+               "       [--symbols <path>] [--trace-functions | --trace-function <name>]\n"
+               "       [--widescreen] [-X11] [--headless]\n"
+               "       [--allow-interpreter] [--allow-fallback]\n"
                "       With no --game, boots the path in <user-dir>/default-game.txt.\n";
 }
 
@@ -117,12 +119,22 @@ int main(int argc, char** argv)
       config.graphics.backend = value("--graphics");
     else if (arg == "--audio")
       config.audio.backend = value("--audio");
+    else if (arg == "--symbols")
+      config.debug.symbol_map = value("--symbols");
+    else if (arg == "--trace-functions")
+      config.debug.trace_functions = true;
+    else if (arg == "--trace-function")
+      config.debug.trace_function = value("--trace-function");
+    else if (arg == "--widescreen")
+      config.graphics.force_widescreen = true;
     else if (arg == "-X11" || arg == "--x11")
       config.window_system = moderngekko::WindowSystem::X11;
     else if (arg == "--headless")
       config.headless = true;
     else if (arg == "--allow-interpreter")
       config.allow_interpreter = true;
+    else if (arg == "--allow-fallback")
+      config.allow_fallback = true;
     else if (arg == "--help" || arg == "-h")
     {
       Usage();

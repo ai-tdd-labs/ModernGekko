@@ -25,6 +25,7 @@ struct BuildOptions
 {
   std::string toolchain = "auto";
   fs::path output;
+  fs::path module_patch;
   std::vector<std::string> runner_arguments;
 };
 
@@ -68,6 +69,12 @@ std::uint64_t Fnv1a(std::string_view value)
   for (unsigned char c : value)
     hash = (hash ^ c) * 0x100000001b3ULL;
   return hash;
+}
+
+std::string ReadFile(const fs::path& path)
+{
+  std::ifstream file(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
 }
 
 std::string ReadCommand(const std::string& command)
@@ -178,6 +185,24 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   if (options.output.empty())
     options.output = DefaultOutput();
 
+  std::string module_patch_contents;
+  if (!options.module_patch.empty())
+  {
+    std::error_code ec;
+    options.module_patch = fs::weakly_canonical(options.module_patch, ec);
+    if (ec || !fs::is_regular_file(options.module_patch))
+    {
+      std::cerr << "module patch not found: " << options.module_patch << '\n';
+      return std::nullopt;
+    }
+    module_patch_contents = ReadFile(options.module_patch);
+    if (module_patch_contents.empty())
+    {
+      std::cerr << "module patch is empty: " << options.module_patch << '\n';
+      return std::nullopt;
+    }
+  }
+
   std::string compiler;
   if (options.toolchain == "auto")
 #if defined(_WIN32)
@@ -234,11 +259,18 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   {
     flags = "compile:/O2 /fp:strict";
   }
-  const std::string identity = std::string(RECOMPCORE_REVISION) + "|dolrecomp=" +
+  std::string identity = std::string(RECOMPCORE_REVISION) + "|dolrecomp=" +
       std::string(RECOMPCORE_REVISION) + "|module-abi=" +
       std::to_string(MODERNGEKKO_MODULE_ABI_VERSION) + "|cpu-abi=" +
       std::to_string(MODERNGEKKO_CPU_ABI_VERSION) + "|" + compiler_identity + "|" +
       std::string(architecture) + "|" + flags;
+  std::ostringstream module_patch_id;
+  if (!module_patch_contents.empty())
+  {
+    module_patch_id << std::hex << std::setfill('0') << std::setw(16)
+                    << Fnv1a(module_patch_contents);
+    identity += "|module-patch=" + module_patch_id.str();
+  }
   std::ostringstream key_tail;
   key_tail << std::hex << std::setfill('0') << std::setw(16) << Fnv1a(identity);
   const std::string cache_key = game.dol_sha256 + "-" + key_tail.str();
@@ -264,7 +296,9 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
              << "module_abi=" << MODERNGEKKO_MODULE_ABI_VERSION << '\n'
              << "cpu_abi=" << MODERNGEKKO_CPU_ABI_VERSION << '\n'
              << "compiler=" << compiler_identity << "architecture=" << architecture << '\n'
-             << "flags=" << flags << '\n';
+             << "flags=" << flags << '\n'
+             << "module_patch="
+             << (module_patch_contents.empty() ? "none" : module_patch_id.str()) << '\n';
     fs::create_directories(options.output / game.disc_id);
     std::ofstream active(options.output / game.disc_id / "active-module.txt");
     active << module.string() << '\n';
@@ -317,6 +351,14 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   }
   else
     std::ofstream{normalized_smc};
+  const fs::path staged_module_patch = generated / "module_patch.c";
+  if (!module_patch_contents.empty())
+    fs::copy_file(options.module_patch, staged_module_patch, fs::copy_options::overwrite_existing);
+  else
+  {
+    std::error_code ec;
+    fs::remove(staged_module_patch, ec);
+  }
 
   const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
   const unsigned compile_jobs =
@@ -345,7 +387,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 void Usage()
 {
   std::cerr << "usage: moderngekko-port inspect <game-root>\n"
-               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path]\n"
+               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c]\n"
                "       moderngekko-port run <game-root> [build options] [-- runner options]\n";
 }
 }  // namespace
@@ -372,6 +414,8 @@ int main(int argc, char** argv)
       options.toolchain = argv[++i];
     else if (arg == "--output" && i + 1 < argc)
       options.output = argv[++i];
+    else if (arg == "--module-patch" && i + 1 < argc)
+      options.module_patch = argv[++i];
     else if (command == "run")
       options.runner_arguments.push_back(arg);
     else

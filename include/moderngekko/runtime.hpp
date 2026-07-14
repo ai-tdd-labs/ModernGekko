@@ -31,6 +31,7 @@ struct GraphicsSettings
 {
   std::string backend;
   std::optional<int> internal_resolution_scale;
+  bool force_widescreen = false;
 };
 
 struct AudioSettings
@@ -41,6 +42,13 @@ struct AudioSettings
 struct InputSettings
 {
   bool background_input = false;
+};
+
+struct DebugSettings
+{
+  std::filesystem::path symbol_map;
+  bool trace_functions = false;
+  std::string trace_function;
 };
 
 enum class WindowSystem
@@ -58,9 +66,11 @@ struct RuntimeConfig
   GraphicsSettings graphics;
   AudioSettings audio;
   InputSettings input;
+  DebugSettings debug;
   WindowSystem window_system = WindowSystem::Default;
   bool headless = false;
   bool allow_interpreter = false;
+  bool allow_fallback = false;
   std::optional<std::string> window_title;
 };
 

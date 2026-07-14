@@ -5,16 +5,19 @@
 #include "Core/Boot/Boot.h"
 #include "Core/Boot/BootManager.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Config/StaticRecompSettings.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Core.h"
 #include "Core/Host.h"
 #include "Core/HW/GBACore.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/PowerPC/StaticRecomp/StaticRecompCore.h"
 #include "Core/PowerPC/StaticRecomp/StaticRecompModuleSource.h"
 #include "Core/System.h"
 #include "DolphinNoGUI/Platform.h"
 #include "UICommon/UICommon.h"
+#include "VideoCommon/VideoConfig.h"
 #include "moderngekko/cpu_state.h"
 #include "moderngekko/module_loader.hpp"
 
@@ -185,11 +188,24 @@ RuntimeCreateResult Runtime::Create(RuntimeConfig config)
     Config::SetBase(Config::MAIN_GFX_BACKEND, std::string("Null"));
   if (impl->config.graphics.internal_resolution_scale)
     Config::SetBase(Config::GFX_EFB_SCALE, *impl->config.graphics.internal_resolution_scale);
+  if (impl->config.graphics.force_widescreen)
+  {
+    Config::SetBase(Config::GFX_ASPECT_RATIO, AspectMode::ForceWide);
+    Config::SetBase(Config::GFX_SUGGESTED_ASPECT_RATIO, AspectMode::ForceWide);
+  }
   if (!impl->config.audio.backend.empty())
     Config::SetBase(Config::MAIN_AUDIO_BACKEND, impl->config.audio.backend);
   else if (impl->config.headless)
     Config::SetBase(Config::MAIN_AUDIO_BACKEND, std::string("No Audio Output"));
   Config::SetBase(Config::MAIN_INPUT_BACKGROUND_INPUT, impl->config.input.background_input);
+  Config::SetBase(Config::MAIN_STATICRECOMP_SYMBOL_MAP,
+                  impl->config.debug.symbol_map.string());
+  Config::SetBase(Config::MAIN_STATICRECOMP_TRACE_FUNCTIONS,
+                  impl->config.debug.trace_functions);
+  Config::SetBase(Config::MAIN_STATICRECOMP_TRACE_FUNCTION,
+                  impl->config.debug.trace_function);
+  Config::SetBase(Config::MAIN_STATICRECOMP_ALLOW_FALLBACK,
+                  impl->config.allow_fallback);
 
   auto& jit = Core::System::GetInstance().GetJitInterface();
   if (impl->config.module.kind == ModuleSource::Kind::DynamicPath)
@@ -252,9 +268,21 @@ RuntimeRunResult Runtime::Run()
   m_impl->booted = true;
   m_impl->platform->MainLoop();
   Core::Stop(Core::System::GetInstance());
+  std::string native_fallback_violation;
+  if (const auto* static_core = dynamic_cast<const StaticRecompCore*>(
+          Core::System::GetInstance().GetJitInterface().GetCore());
+      static_core && static_core->HasNativeFallbackViolation())
+  {
+    native_fallback_violation = static_core->GetNativeFallbackViolation();
+  }
   Core::Shutdown(Core::System::GetInstance());
   m_impl->booted = false;
   m_impl->running = false;
+  if (!native_fallback_violation.empty())
+  {
+    return {RuntimeExitReason::BootFailed,
+            RuntimeError{RuntimeErrorCode::BootFailed, std::move(native_fallback_violation)}};
+  }
   return {};
 }
 
