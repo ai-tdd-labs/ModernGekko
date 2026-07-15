@@ -33,6 +33,7 @@ struct GraphicsSettings
   std::string backend;
   std::optional<int> internal_resolution_scale;
   bool force_widescreen = false;
+  bool show_fps = false;
 };
 
 struct AudioSettings

@@ -202,6 +202,7 @@ RuntimeCreateResult Runtime::Create(RuntimeConfig config)
                                      AspectMode::ForceStandard;
   Config::SetCurrent(Config::GFX_ASPECT_RATIO, aspect_mode);
   Config::SetCurrent(Config::GFX_SUGGESTED_ASPECT_RATIO, aspect_mode);
+  Config::SetCurrent(Config::GFX_SHOW_FPS, impl->config.graphics.show_fps);
   if (!impl->config.audio.backend.empty())
     Config::SetCurrent(Config::MAIN_AUDIO_BACKEND, impl->config.audio.backend);
   else if (impl->config.headless)

@@ -42,7 +42,7 @@ void Usage()
                "       [--symbols <path>] [--trace-functions | --trace-function <name>]\n"
                "       [--idle-pc <address>]\n"
                "       [--screenshot-request <path>]\n"
-               "       [--widescreen] [-X11] [--headless]\n"
+               "       [--widescreen] [--show-fps] [-X11] [--headless]\n"
                "       [--allow-interpreter] [--allow-fallback]\n"
                "       With no --game, boots the path in <user-dir>/default-game.txt.\n";
 }
@@ -156,6 +156,8 @@ int main(int argc, char** argv)
       screenshot_request = value("--screenshot-request");
     else if (arg == "--widescreen")
       config.graphics.force_widescreen = true;
+    else if (arg == "--show-fps")
+      config.graphics.show_fps = true;
     else if (arg == "-X11" || arg == "--x11")
       config.window_system = moderngekko::WindowSystem::X11;
     else if (arg == "--headless")
