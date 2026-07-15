@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define MODERNGEKKO_MODULE_ABI_VERSION 2u
+#define MODERNGEKKO_MODULE_ABI_VERSION 3u
 #define MODERNGEKKO_GET_MODULE_SYMBOL "staticrecomp_get_module"
 
 #if defined(_WIN32)
@@ -25,6 +25,8 @@ typedef struct ModernGekkoRange
     uint32_t start;
     uint32_t end;
 } ModernGekkoRange;
+
+typedef void (*ModernGekkoChunkFn)(CPUState* state);
 
 typedef struct ModernGekkoModuleDesc
 {
@@ -44,6 +46,7 @@ typedef struct ModernGekkoModuleDesc
     const ModernGekkoRange* chunk_ranges;
     uint32_t num_chunk_ranges;
     const uint64_t* chunk_hashes;
+    const ModernGekkoChunkFn* chunk_functions;
 } ModernGekkoModuleDesc;
 
 typedef const ModernGekkoModuleDesc* (*ModernGekkoGetModuleFn)(void);
@@ -59,6 +62,7 @@ typedef struct ModernGekkoHostEvent
 typedef bool (*ModernGekkoTakeHostEventFn)(ModernGekkoHostEvent* event);
 
 typedef ModernGekkoRange StaticRecompRange;
+typedef ModernGekkoChunkFn StaticRecompChunkFn;
 typedef ModernGekkoModuleDesc StaticRecompModuleDesc;
 typedef ModernGekkoGetModuleFn StaticRecompGetModuleFn;
 typedef ModernGekkoHostEvent StaticRecompHostEvent;

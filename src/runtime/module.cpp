@@ -27,7 +27,7 @@ static bool chunks_tile_code(const ModernGekkoModuleDesc* descriptor)
     uint32_t chunk_index = 0u;
 
     if (!ranges_are_valid(descriptor->chunk_ranges, descriptor->num_chunk_ranges) ||
-        descriptor->chunk_hashes == NULL)
+        descriptor->chunk_hashes == NULL || descriptor->chunk_functions == NULL)
     {
         return false;
     }
@@ -42,7 +42,8 @@ static bool chunks_tile_code(const ModernGekkoModuleDesc* descriptor)
         {
             const ModernGekkoRange chunk = descriptor->chunk_ranges[chunk_index];
 
-            if (chunk.start != cursor || chunk.end > code.end)
+            if (chunk.start != cursor || chunk.end > code.end ||
+                descriptor->chunk_functions[chunk_index] == NULL)
                 return false;
 
             cursor = chunk.end;

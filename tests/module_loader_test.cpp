@@ -9,8 +9,13 @@ int Dispatch(CPUState*, std::uint32_t)
   return 0;
 }
 
+void Chunk(CPUState*)
+{
+}
+
 constexpr ModernGekkoRange ranges[] = {{0x80001000u, 0x80001020u}};
 constexpr std::uint64_t hashes[] = {1u};
+constexpr ModernGekkoChunkFn chunk_functions[] = {Chunk};
 const ModernGekkoModuleDesc attached_descriptor = {
     MODERNGEKKO_MODULE_ABI_VERSION,
     MODERNGEKKO_CPU_ABI_VERSION,
@@ -26,6 +31,7 @@ const ModernGekkoModuleDesc attached_descriptor = {
     ranges,
     1u,
     hashes,
+    chunk_functions,
 };
 }
 

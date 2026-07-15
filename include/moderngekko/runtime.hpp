@@ -28,10 +28,20 @@ struct ModuleSource
   const ModernGekkoModuleDesc* descriptor = nullptr;
 };
 
+enum class ShaderCompilationPolicy
+{
+  Synchronous,
+  SynchronousUberShaders,
+  AsynchronousUberShaders,
+  AsynchronousSkipRendering,
+};
+
 struct GraphicsSettings
 {
   std::string backend;
   std::optional<int> internal_resolution_scale;
+  std::optional<ShaderCompilationPolicy> shader_compilation;
+  std::optional<bool> wait_for_shaders_before_starting;
   bool force_widescreen = false;
   bool show_fps = false;
 };

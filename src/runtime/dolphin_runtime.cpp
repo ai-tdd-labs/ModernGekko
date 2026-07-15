@@ -32,6 +32,8 @@ namespace
 static_assert(sizeof(ModernGekkoModuleDesc) == sizeof(StaticRecompModuleDesc));
 static_assert(offsetof(ModernGekkoModuleDesc, chunk_hashes) ==
               offsetof(StaticRecompModuleDesc, chunk_hashes));
+static_assert(offsetof(ModernGekkoModuleDesc, chunk_functions) ==
+              offsetof(StaticRecompModuleDesc, chunk_functions));
 std::mutex s_runtime_mutex;
 bool s_runtime_active = false;
 Platform* s_platform = nullptr;
@@ -195,6 +197,31 @@ RuntimeCreateResult Runtime::Create(RuntimeConfig config)
     Config::SetCurrent(Config::MAIN_GFX_BACKEND, std::string("Null"));
   if (impl->config.graphics.internal_resolution_scale)
     Config::SetCurrent(Config::GFX_EFB_SCALE, *impl->config.graphics.internal_resolution_scale);
+  if (impl->config.graphics.shader_compilation)
+  {
+    ShaderCompilationMode mode = ShaderCompilationMode::Synchronous;
+    switch (*impl->config.graphics.shader_compilation)
+    {
+    case ShaderCompilationPolicy::Synchronous:
+      mode = ShaderCompilationMode::Synchronous;
+      break;
+    case ShaderCompilationPolicy::SynchronousUberShaders:
+      mode = ShaderCompilationMode::SynchronousUberShaders;
+      break;
+    case ShaderCompilationPolicy::AsynchronousUberShaders:
+      mode = ShaderCompilationMode::AsynchronousUberShaders;
+      break;
+    case ShaderCompilationPolicy::AsynchronousSkipRendering:
+      mode = ShaderCompilationMode::AsynchronousSkipRendering;
+      break;
+    }
+    Config::SetCurrent(Config::GFX_SHADER_COMPILATION_MODE, mode);
+  }
+  if (impl->config.graphics.wait_for_shaders_before_starting)
+  {
+    Config::SetCurrent(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING,
+                       *impl->config.graphics.wait_for_shaders_before_starting);
+  }
   // Always select an aspect for this run so a previous widescreen launch or a
   // movie config cannot silently leak into a 4:3 baseline (or vice versa).
   const AspectMode aspect_mode = impl->config.graphics.force_widescreen ?

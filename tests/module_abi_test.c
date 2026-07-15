@@ -11,6 +11,11 @@ static int dispatch(CPUState* state, uint32_t address)
     return 1;
 }
 
+static void chunk(CPUState* state)
+{
+    state->gpr[0] = state->pc;
+}
+
 static void on_state_loaded(CPUState* state)
 {
     state->gpr[0] = 0;
@@ -20,6 +25,7 @@ int main(void)
 {
     static const ModernGekkoRange code_ranges[] = {{0x80003100u, 0x80003200u}};
     static const uint64_t chunk_hashes[] = {0xCBF29CE484222325ull};
+    static const ModernGekkoChunkFn chunk_functions[] = {chunk};
     StaticRecompModuleDesc descriptor = {
         MODERNGEKKO_MODULE_ABI_VERSION,
         MODERNGEKKO_CPU_ABI_VERSION,
@@ -35,6 +41,7 @@ int main(void)
         code_ranges,
         1u,
         chunk_hashes,
+        chunk_functions,
     };
     const ModernGekkoModuleRequirements requirements = {
         MODERNGEKKO_CPU_ABI_VERSION,
@@ -43,8 +50,8 @@ int main(void)
     };
     CPUState state = {0};
 
-    COMPILE_ASSERT(module_abi_version_is_two,
-                   MODERNGEKKO_MODULE_ABI_VERSION == 2u);
+    COMPILE_ASSERT(module_abi_version_is_three,
+                   MODERNGEKKO_MODULE_ABI_VERSION == 3u);
     COMPILE_ASSERT(game_id_storage_is_eight_bytes,
                    sizeof(descriptor.game_id) == 8u);
     COMPILE_ASSERT(dispatch_follows_entry_point,
@@ -95,6 +102,24 @@ int main(void)
         MODERNGEKKO_MODULE_INVALID_CHUNKS)
     {
         return 10;
+    }
+    descriptor.chunk_ranges = code_ranges;
+
+    descriptor.chunk_functions = NULL;
+    if (moderngekko_validate_module(&descriptor, &requirements) !=
+        MODERNGEKKO_MODULE_INVALID_CHUNKS)
+    {
+        return 11;
+    }
+
+    {
+        static const ModernGekkoChunkFn null_chunk_functions[] = {NULL};
+        descriptor.chunk_functions = null_chunk_functions;
+        if (moderngekko_validate_module(&descriptor, &requirements) !=
+            MODERNGEKKO_MODULE_INVALID_CHUNKS)
+        {
+            return 12;
+        }
     }
 
     return 0;

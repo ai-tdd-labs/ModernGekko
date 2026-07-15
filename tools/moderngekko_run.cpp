@@ -41,6 +41,8 @@ void Usage()
                "       [--user-dir <path>] [--title <text>]\n"
                "       [--movie <dtm>]\n"
                "       [--graphics <backend>] [--audio <backend>]\n"
+               "       [--shader-compilation <sync|sync-ubershaders|async-ubershaders|async-skip>]\n"
+               "       [--wait-for-shaders-before-starting]\n"
                "       [--symbols <path>] [--trace-functions | --trace-function <name>]\n"
                "       [--idle-pc <address>]\n"
                "       [--screenshot-request <path>]\n"
@@ -80,6 +82,23 @@ std::optional<std::uint32_t> TryParseAddress(std::string_view text)
   {
     return std::nullopt;
   }
+}
+
+moderngekko::ShaderCompilationPolicy ParseShaderCompilationPolicy(const char* text)
+{
+  const std::string_view value{text};
+  if (value == "sync")
+    return moderngekko::ShaderCompilationPolicy::Synchronous;
+  if (value == "sync-ubershaders")
+    return moderngekko::ShaderCompilationPolicy::SynchronousUberShaders;
+  if (value == "async-ubershaders")
+    return moderngekko::ShaderCompilationPolicy::AsynchronousUberShaders;
+  if (value == "async-skip")
+    return moderngekko::ShaderCompilationPolicy::AsynchronousSkipRendering;
+
+  std::cerr << "--shader-compilation requires one of: sync, sync-ubershaders, "
+               "async-ubershaders, async-skip\n";
+  std::exit(2);
 }
 
 std::filesystem::path ReadDefaultGame(const std::filesystem::path& user_directory)
@@ -160,6 +179,11 @@ int main(int argc, char** argv)
       config.window_title = value("--title");
     else if (arg == "--graphics")
       config.graphics.backend = value("--graphics");
+    else if (arg == "--shader-compilation")
+      config.graphics.shader_compilation =
+          ParseShaderCompilationPolicy(value("--shader-compilation"));
+    else if (arg == "--wait-for-shaders-before-starting")
+      config.graphics.wait_for_shaders_before_starting = true;
     else if (arg == "--audio")
       config.audio.backend = value("--audio");
     else if (arg == "--symbols")
