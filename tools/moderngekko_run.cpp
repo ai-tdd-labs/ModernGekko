@@ -10,8 +10,10 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -61,6 +63,22 @@ std::uint32_t ParseAddress(const char* option, const char* text)
   {
     std::cerr << option << " requires a 32-bit address (for example 0x800F2038)\n";
     std::exit(2);
+  }
+}
+
+std::optional<std::uint32_t> TryParseAddress(std::string_view text)
+{
+  try
+  {
+    std::size_t consumed = 0;
+    const unsigned long long value = std::stoull(std::string(text), &consumed, 0);
+    if (consumed != text.size() || value > std::numeric_limits<std::uint32_t>::max())
+      return std::nullopt;
+    return static_cast<std::uint32_t>(value);
+  }
+  catch (const std::exception&)
+  {
+    return std::nullopt;
   }
 }
 
@@ -271,17 +289,60 @@ int main(int argc, char** argv)
       if (!screenshot_request.empty())
       {
         std::error_code ec;
-        if (std::filesystem::remove(screenshot_request, ec))
+        if (std::filesystem::is_regular_file(screenshot_request, ec))
         {
-          if (const auto error = created.runtime->RequestScreenshot(
-                  screenshot_request.stem().string()))
+          std::ifstream request_file(screenshot_request);
+          std::string request;
+          std::getline(request_file, request);
+          if (!request.empty() && request.back() == '\r')
+            request.pop_back();
+
+          std::optional<std::uint32_t> host_event;
+          bool valid_request = true;
+          constexpr std::string_view event_prefix = "event=";
+          if (request.starts_with(event_prefix))
+          {
+            host_event = TryParseAddress(std::string_view(request).substr(event_prefix.size()));
+            valid_request = host_event.has_value() && *host_event != 0;
+          }
+          else if (!request.empty() && request != "capture")
+          {
+            valid_request = false;
+          }
+
+          std::optional<moderngekko::RuntimeError> error;
+          if (valid_request)
+          {
+            error = host_event ? created.runtime->RequestScreenshotOnHostEvent(
+                                     screenshot_request.stem().string(), *host_event) :
+                                 created.runtime->RequestScreenshot(
+                                     screenshot_request.stem().string());
+          }
+
+          if (!valid_request)
+          {
+            std::cerr << "invalid screenshot request: " << request << '\n';
+            std::filesystem::remove(screenshot_request, ec);
+          }
+          else if (error && error->code != moderngekko::RuntimeErrorCode::InvalidState)
           {
             std::cerr << "screenshot request failed: " << error->message << '\n';
+            std::filesystem::remove(screenshot_request, ec);
           }
-          else
+          else if (!error)
           {
-            std::cout << "renderer screenshot requested: "
-                      << screenshot_request.stem().string() << ".png\n";
+            std::filesystem::remove(screenshot_request, ec);
+            if (host_event)
+            {
+              std::cout << "renderer screenshot armed: " << screenshot_request.stem().string()
+                        << ".png event=0x" << std::hex << std::uppercase << *host_event
+                        << std::dec << '\n';
+            }
+            else
+            {
+              std::cout << "renderer screenshot requested: "
+                        << screenshot_request.stem().string() << ".png\n";
+            }
           }
         }
       }

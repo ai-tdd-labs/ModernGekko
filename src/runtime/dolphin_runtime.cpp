@@ -85,7 +85,7 @@ struct Runtime::Impl
   Common::EventHook state_hook;
   bool ui_initialized = false;
   bool controllers_initialized = false;
-  bool booted = false;
+  std::atomic<bool> booted{false};
   std::atomic<bool> running{false};
 };
 
@@ -321,11 +321,25 @@ void Runtime::RequestStop()
 
 std::optional<RuntimeError> Runtime::RequestScreenshot(std::string_view name)
 {
-  if (!m_impl->running)
+  if (!m_impl->running || !m_impl->booted)
     return RuntimeError{RuntimeErrorCode::InvalidState, "runtime is not running"};
   if (name.empty())
     return RuntimeError{RuntimeErrorCode::InvalidState, "screenshot name is empty"};
   Core::SaveScreenShot(name);
+  return {};
+}
+
+std::optional<RuntimeError> Runtime::RequestScreenshotOnHostEvent(std::string_view name,
+                                                                  std::uint32_t event_id)
+{
+  if (!m_impl->running || !m_impl->booted)
+    return RuntimeError{RuntimeErrorCode::InvalidState, "runtime is not running"};
+  if (name.empty())
+    return RuntimeError{RuntimeErrorCode::InvalidState, "screenshot name is empty"};
+  if (event_id == 0)
+    return RuntimeError{RuntimeErrorCode::InvalidState, "screenshot host event is zero"};
+  if (!Core::SaveScreenShotOnHostEvent(name, event_id))
+    return RuntimeError{RuntimeErrorCode::InvalidState, "screenshot renderer is not ready"};
   return {};
 }
 

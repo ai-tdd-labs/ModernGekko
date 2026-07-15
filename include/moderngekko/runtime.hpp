@@ -132,6 +132,8 @@ public:
   RuntimeRunResult Run();
   void RequestStop();
   std::optional<RuntimeError> RequestScreenshot(std::string_view name);
+  std::optional<RuntimeError> RequestScreenshotOnHostEvent(std::string_view name,
+                                                           std::uint32_t event_id);
   std::optional<RuntimeError> Pause();
   std::optional<RuntimeError> Resume();
 

@@ -48,12 +48,28 @@ typedef struct ModernGekkoModuleDesc
 
 typedef const ModernGekkoModuleDesc* (*ModernGekkoGetModuleFn)(void);
 
+typedef struct ModernGekkoHostEvent
+{
+    uint32_t id;
+    uint32_t reserved;
+    uint64_t guest_timebase;
+    uint64_t core_ticks;
+} ModernGekkoHostEvent;
+
+typedef bool (*ModernGekkoTakeHostEventFn)(ModernGekkoHostEvent* event);
+
 typedef ModernGekkoRange StaticRecompRange;
 typedef ModernGekkoModuleDesc StaticRecompModuleDesc;
 typedef ModernGekkoGetModuleFn StaticRecompGetModuleFn;
+typedef ModernGekkoHostEvent StaticRecompHostEvent;
+typedef ModernGekkoTakeHostEventFn StaticRecompTakeHostEventFn;
 
 #define STATICRECOMP_ABI_VERSION MODERNGEKKO_MODULE_ABI_VERSION
 #define STATICRECOMP_GET_MODULE_SYMBOL MODERNGEKKO_GET_MODULE_SYMBOL
+#define MODERNGEKKO_TAKE_HOST_EVENT_SYMBOL "staticrecomp_take_host_event"
+#define STATICRECOMP_TAKE_HOST_EVENT_SYMBOL MODERNGEKKO_TAKE_HOST_EVENT_SYMBOL
+
+void moderngekko_module_signal_host_event(CPUState* state, uint32_t event_id);
 
 #ifdef __cplusplus
 }
