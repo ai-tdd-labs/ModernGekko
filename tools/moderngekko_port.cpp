@@ -26,6 +26,7 @@ struct BuildOptions
   std::string toolchain = "auto";
   fs::path output;
   fs::path module_patch;
+  fs::path module_patch_addresses;
   bool fast_build = false;
   std::vector<std::string> runner_arguments;
 };
@@ -187,6 +188,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     options.output = DefaultOutput();
 
   std::string module_patch_contents;
+  std::string module_patch_addresses_contents;
   if (!options.module_patch.empty())
   {
     std::error_code ec;
@@ -202,6 +204,31 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
       std::cerr << "module patch is empty: " << options.module_patch << '\n';
       return std::nullopt;
     }
+
+    if (options.module_patch_addresses.empty())
+    {
+      std::cerr << "--module-patch requires --module-patch-addresses <file>\n";
+      return std::nullopt;
+    }
+    options.module_patch_addresses = fs::weakly_canonical(options.module_patch_addresses, ec);
+    if (ec || !fs::is_regular_file(options.module_patch_addresses))
+    {
+      std::cerr << "module patch-address manifest not found: "
+                << options.module_patch_addresses << '\n';
+      return std::nullopt;
+    }
+    module_patch_addresses_contents = ReadFile(options.module_patch_addresses);
+    if (module_patch_addresses_contents.empty())
+    {
+      std::cerr << "module patch-address manifest is empty: "
+                << options.module_patch_addresses << '\n';
+      return std::nullopt;
+    }
+  }
+  else if (!options.module_patch_addresses.empty())
+  {
+    std::cerr << "--module-patch-addresses requires --module-patch <file>\n";
+    return std::nullopt;
   }
 
   std::string compiler;
@@ -265,14 +292,18 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
       std::string(RECOMPCORE_REVISION) + "|module-abi=" +
       std::to_string(MODERNGEKKO_MODULE_ABI_VERSION) + "|cpu-abi=" +
       std::to_string(MODERNGEKKO_CPU_ABI_VERSION) + "|" + compiler_identity + "|" +
-      std::string(architecture) + "|" + flags;
+      std::string(architecture) + "|" + flags + "|sparse-patch-dispatch=v1";
   std::string identity = build_identity;
   std::ostringstream module_patch_id;
+  std::ostringstream module_patch_addresses_id;
   if (!module_patch_contents.empty())
   {
     module_patch_id << std::hex << std::setfill('0') << std::setw(16)
                     << Fnv1a(module_patch_contents);
-    identity += "|module-patch=" + module_patch_id.str();
+    module_patch_addresses_id << std::hex << std::setfill('0') << std::setw(16)
+                              << Fnv1a(module_patch_addresses_contents);
+    identity += "|module-patch=" + module_patch_id.str() +
+                "|module-patch-addresses=" + module_patch_addresses_id.str();
   }
   std::ostringstream key_tail;
   key_tail << std::hex << std::setfill('0') << std::setw(16) << Fnv1a(identity);
@@ -284,8 +315,8 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   // only module_patch.c after an iterative patch edit instead of recompiling
   // every generated CPU chunk. Patched and unpatched source graphs stay apart.
   const std::string workspace_identity =
-      build_identity + (module_patch_contents.empty() ? "|workspace=base-v1" :
-                                                        "|workspace=patched-v1");
+      build_identity + (module_patch_contents.empty() ? "|workspace=base-v2" :
+                                                        "|workspace=patched-v2");
   std::ostringstream workspace_tail;
   workspace_tail << std::hex << std::setfill('0') << std::setw(16)
                  << Fnv1a(workspace_identity);
@@ -313,7 +344,14 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
              << "compiler=" << compiler_identity << "architecture=" << architecture << '\n'
              << "flags=" << flags << '\n'
              << "module_patch="
-             << (module_patch_contents.empty() ? "none" : module_patch_id.str()) << '\n';
+             << (module_patch_contents.empty() ? "none" : module_patch_id.str()) << '\n'
+             << "module_patch_addresses="
+             << (module_patch_addresses_contents.empty() ? "none" :
+                                                          module_patch_addresses_id.str())
+             << '\n';
+    if (!module_patch_addresses_contents.empty())
+      fs::copy_file(options.module_patch_addresses, artifact / "module_patch_addresses.txt",
+                    fs::copy_options::overwrite_existing);
     fs::create_directories(options.output / game.disc_id);
     std::ofstream active(options.output / game.disc_id / "active-module.txt");
     active << module.string() << '\n';
@@ -370,12 +408,18 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   else
     std::ofstream{normalized_smc};
   const fs::path staged_module_patch = generated / "module_patch.c";
+  const fs::path staged_module_patch_addresses = generated / "module_patch_addresses.txt";
   if (!module_patch_contents.empty())
+  {
     fs::copy_file(options.module_patch, staged_module_patch, fs::copy_options::overwrite_existing);
+    fs::copy_file(options.module_patch_addresses, staged_module_patch_addresses,
+                  fs::copy_options::overwrite_existing);
+  }
   else
   {
     std::error_code ec;
     fs::remove(staged_module_patch, ec);
+    fs::remove(staged_module_patch_addresses, ec);
   }
 
   const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
@@ -406,7 +450,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 void Usage()
 {
   std::cerr << "usage: moderngekko-port inspect <game-root>\n"
-               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c] [--fast-build]\n"
+               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c --module-patch-addresses file.txt] [--fast-build]\n"
                "       moderngekko-port run <game-root> [build options] [-- runner options]\n";
 }
 }  // namespace
@@ -435,6 +479,8 @@ int main(int argc, char** argv)
       options.output = argv[++i];
     else if (arg == "--module-patch" && i + 1 < argc)
       options.module_patch = argv[++i];
+    else if (arg == "--module-patch-addresses" && i + 1 < argc)
+      options.module_patch_addresses = argv[++i];
     else if (arg == "--fast-build")
       options.fast_build = true;
     else if (command == "run")

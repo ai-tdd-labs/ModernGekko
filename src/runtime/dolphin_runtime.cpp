@@ -318,6 +318,16 @@ void Runtime::RequestStop()
     m_impl->platform->RequestShutdown();
 }
 
+std::optional<RuntimeError> Runtime::RequestScreenshot(std::string_view name)
+{
+  if (!m_impl->running)
+    return RuntimeError{RuntimeErrorCode::InvalidState, "runtime is not running"};
+  if (name.empty())
+    return RuntimeError{RuntimeErrorCode::InvalidState, "screenshot name is empty"};
+  Core::SaveScreenShot(name);
+  return {};
+}
+
 std::optional<RuntimeError> Runtime::Pause()
 {
   if (!m_impl->running)

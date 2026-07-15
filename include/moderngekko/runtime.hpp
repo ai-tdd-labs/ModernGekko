@@ -130,6 +130,7 @@ public:
 
   RuntimeRunResult Run();
   void RequestStop();
+  std::optional<RuntimeError> RequestScreenshot(std::string_view name);
   std::optional<RuntimeError> Pause();
   std::optional<RuntimeError> Resume();
 

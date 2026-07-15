@@ -41,6 +41,7 @@ void Usage()
                "       [--graphics <backend>] [--audio <backend>]\n"
                "       [--symbols <path>] [--trace-functions | --trace-function <name>]\n"
                "       [--idle-pc <address>]\n"
+               "       [--screenshot-request <path>]\n"
                "       [--widescreen] [-X11] [--headless]\n"
                "       [--allow-interpreter] [--allow-fallback]\n"
                "       With no --game, boots the path in <user-dir>/default-game.txt.\n";
@@ -117,6 +118,7 @@ int main(int argc, char** argv)
   config.window_title = MODERNGEKKO_DEFAULT_WINDOW_TITLE;
 #endif
   std::filesystem::path module_path;
+  std::filesystem::path screenshot_request;
   for (int i = 1; i < argc; ++i)
   {
     const std::string arg = argv[i];
@@ -150,6 +152,8 @@ int main(int argc, char** argv)
       config.debug.trace_function = value("--trace-function");
     else if (arg == "--idle-pc")
       config.debug.idle_pc = ParseAddress("--idle-pc", value("--idle-pc"));
+    else if (arg == "--screenshot-request")
+      screenshot_request = value("--screenshot-request");
     else if (arg == "--widescreen")
       config.graphics.force_widescreen = true;
     else if (arg == "-X11" || arg == "--x11")
@@ -252,9 +256,9 @@ int main(int argc, char** argv)
 
   std::signal(SIGINT, HandleStopSignal);
   std::signal(SIGTERM, HandleStopSignal);
-  std::atomic_bool stop_signal_watcher = false;
-  std::thread signal_watcher([&] {
-    while (!stop_signal_watcher.load(std::memory_order_relaxed))
+  std::atomic_bool control_watcher_done = false;
+  std::thread control_watcher([&] {
+    while (!control_watcher_done.load(std::memory_order_relaxed))
     {
       if (s_stop_requested)
       {
@@ -262,12 +266,33 @@ int main(int argc, char** argv)
         created.runtime->RequestStop();
         return;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      if (!screenshot_request.empty())
+      {
+        std::error_code ec;
+        if (std::filesystem::remove(screenshot_request, ec))
+        {
+          if (const auto error = created.runtime->RequestScreenshot(
+                  screenshot_request.stem().string()))
+          {
+            std::cerr << "screenshot request failed: " << error->message << '\n';
+          }
+          else
+          {
+            std::cout << "renderer screenshot requested: "
+                      << screenshot_request.stem().string() << ".png\n";
+          }
+        }
+      }
+      // Screenshot requests are used for deterministic A/B capture. Keep the
+      // control latency below one 60 Hz frame only for that opt-in mode; normal
+      // gameplay retains the low-wakeup stop-signal watcher cadence.
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(screenshot_request.empty() ? 50 : 2));
     }
   });
   const moderngekko::RuntimeRunResult result = created.runtime->Run();
-  stop_signal_watcher.store(true, std::memory_order_relaxed);
-  signal_watcher.join();
+  control_watcher_done.store(true, std::memory_order_relaxed);
+  control_watcher.join();
   if (result.error)
   {
     std::cerr << "runtime failed: " << result.error->message << '\n';

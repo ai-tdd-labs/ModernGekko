@@ -391,6 +391,13 @@ if(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME)
 endif()
 
 if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME moderngekko.sparse_patch_manifest
+        COMMAND Python3::Interpreter
+                "${CMAKE_CURRENT_SOURCE_DIR}/vendor/dolphin/module-template/test_gen_module_patch_dispatch.py"
+    )
+
     add_executable(moderngekko_game_inspect_test tests/game_inspect_test.cpp)
     target_link_libraries(moderngekko_game_inspect_test PRIVATE ModernGekko::LegacyRuntime)
     add_test(NAME moderngekko.game_inspect COMMAND moderngekko_game_inspect_test)
