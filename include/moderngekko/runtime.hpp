@@ -3,6 +3,7 @@
 #include "moderngekko/game.hpp"
 #include "moderngekko/module_abi.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -49,6 +50,7 @@ struct DebugSettings
   std::filesystem::path symbol_map;
   bool trace_functions = false;
   std::string trace_function;
+  std::optional<std::uint32_t> idle_pc;
 };
 
 enum class WindowSystem
@@ -62,6 +64,7 @@ struct RuntimeConfig
 {
   std::filesystem::path game_root;
   std::filesystem::path user_directory;
+  std::filesystem::path input_movie;
   ModuleSource module;
   GraphicsSettings graphics;
   AudioSettings audio;

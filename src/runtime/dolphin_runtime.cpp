@@ -10,6 +10,7 @@
 #include "Core/Core.h"
 #include "Core/Host.h"
 #include "Core/HW/GBACore.h"
+#include "Core/Movie.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/PowerPC/StaticRecomp/StaticRecompCore.h"
@@ -116,6 +117,9 @@ RuntimeCreateResult Runtime::Create(RuntimeConfig config)
   GameInspectResult inspected = InspectGame(config.game_root);
   if (!inspected)
     return {{}, RuntimeError{RuntimeErrorCode::InvalidGame, inspected.error}};
+  if (!config.input_movie.empty() && !std::filesystem::is_regular_file(config.input_movie))
+    return {{}, RuntimeError{RuntimeErrorCode::InitializationFailed,
+                             "input movie not found: " + config.input_movie.string()}};
 
   const ModernGekkoModuleRequirements requirements = {
       MODERNGEKKO_CPU_ABI_VERSION, static_cast<std::uint32_t>(sizeof(CPUState)),
@@ -181,31 +185,38 @@ RuntimeCreateResult Runtime::Create(RuntimeConfig config)
   impl->controllers_initialized = true;
   impl->platform->SetTitle(impl->title);
 
-  Config::SetBase(Config::MAIN_CPU_CORE, PowerPC::CPUCore::StaticRecomp);
+  // Runtime invariants belong to CurrentRun, whose priority is above movie and
+  // per-game layers. A DTM recorded under Dolphin's JIT must never replace the
+  // supplied native module with the recorded CPU core during playback.
+  Config::SetCurrent(Config::MAIN_CPU_CORE, PowerPC::CPUCore::StaticRecomp);
   if (!impl->config.graphics.backend.empty())
-    Config::SetBase(Config::MAIN_GFX_BACKEND, impl->config.graphics.backend);
+    Config::SetCurrent(Config::MAIN_GFX_BACKEND, impl->config.graphics.backend);
   else if (impl->config.headless)
-    Config::SetBase(Config::MAIN_GFX_BACKEND, std::string("Null"));
+    Config::SetCurrent(Config::MAIN_GFX_BACKEND, std::string("Null"));
   if (impl->config.graphics.internal_resolution_scale)
-    Config::SetBase(Config::GFX_EFB_SCALE, *impl->config.graphics.internal_resolution_scale);
-  if (impl->config.graphics.force_widescreen)
-  {
-    Config::SetBase(Config::GFX_ASPECT_RATIO, AspectMode::ForceWide);
-    Config::SetBase(Config::GFX_SUGGESTED_ASPECT_RATIO, AspectMode::ForceWide);
-  }
+    Config::SetCurrent(Config::GFX_EFB_SCALE, *impl->config.graphics.internal_resolution_scale);
+  // Always select an aspect for this run so a previous widescreen launch or a
+  // movie config cannot silently leak into a 4:3 baseline (or vice versa).
+  const AspectMode aspect_mode = impl->config.graphics.force_widescreen ?
+                                     AspectMode::ForceWide :
+                                     AspectMode::ForceStandard;
+  Config::SetCurrent(Config::GFX_ASPECT_RATIO, aspect_mode);
+  Config::SetCurrent(Config::GFX_SUGGESTED_ASPECT_RATIO, aspect_mode);
   if (!impl->config.audio.backend.empty())
-    Config::SetBase(Config::MAIN_AUDIO_BACKEND, impl->config.audio.backend);
+    Config::SetCurrent(Config::MAIN_AUDIO_BACKEND, impl->config.audio.backend);
   else if (impl->config.headless)
-    Config::SetBase(Config::MAIN_AUDIO_BACKEND, std::string("No Audio Output"));
-  Config::SetBase(Config::MAIN_INPUT_BACKGROUND_INPUT, impl->config.input.background_input);
-  Config::SetBase(Config::MAIN_STATICRECOMP_SYMBOL_MAP,
-                  impl->config.debug.symbol_map.string());
-  Config::SetBase(Config::MAIN_STATICRECOMP_TRACE_FUNCTIONS,
-                  impl->config.debug.trace_functions);
-  Config::SetBase(Config::MAIN_STATICRECOMP_TRACE_FUNCTION,
-                  impl->config.debug.trace_function);
-  Config::SetBase(Config::MAIN_STATICRECOMP_ALLOW_FALLBACK,
-                  impl->config.allow_fallback);
+    Config::SetCurrent(Config::MAIN_AUDIO_BACKEND, std::string("No Audio Output"));
+  Config::SetCurrent(Config::MAIN_INPUT_BACKGROUND_INPUT, impl->config.input.background_input);
+  Config::SetCurrent(Config::MAIN_STATICRECOMP_SYMBOL_MAP,
+                     impl->config.debug.symbol_map.string());
+  Config::SetCurrent(Config::MAIN_STATICRECOMP_TRACE_FUNCTIONS,
+                     impl->config.debug.trace_functions);
+  Config::SetCurrent(Config::MAIN_STATICRECOMP_TRACE_FUNCTION,
+                     impl->config.debug.trace_function);
+  Config::SetCurrent(Config::MAIN_STATICRECOMP_IDLE_PC,
+                     impl->config.debug.idle_pc.value_or(0));
+  Config::SetCurrent(Config::MAIN_STATICRECOMP_ALLOW_FALLBACK,
+                     impl->config.allow_fallback);
 
   auto& jit = Core::System::GetInstance().GetJitInterface();
   if (impl->config.module.kind == ModuleSource::Kind::DynamicPath)
@@ -253,6 +264,21 @@ RuntimeRunResult Runtime::Run()
     m_impl->running = false;
     return {RuntimeExitReason::BootFailed,
             RuntimeError{RuntimeErrorCode::BootFailed, "Dolphin rejected the extracted disc"}};
+  }
+  if (!m_impl->config.input_movie.empty())
+  {
+    std::optional<std::string> savestate_path;
+    auto& movie = Core::System::GetInstance().GetMovie();
+    if (!movie.PlayInput(m_impl->config.input_movie.string(), &savestate_path))
+    {
+      m_impl->running = false;
+      return {RuntimeExitReason::BootFailed,
+              RuntimeError{RuntimeErrorCode::BootFailed,
+                           "Dolphin rejected input movie: " +
+                               m_impl->config.input_movie.string()}};
+    }
+    boot->boot_session_data.SetSavestateData(std::move(savestate_path),
+                                             DeleteSavestateAfterBoot::No);
   }
   m_impl->state_hook = Core::AddOnStateChangedCallback([this](Core::State state) {
     if (state == Core::State::Uninitialized && m_impl->platform)

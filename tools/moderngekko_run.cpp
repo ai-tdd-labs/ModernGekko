@@ -9,6 +9,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,11 +37,30 @@ void Usage()
   std::cerr << "usage: " MODERNGEKKO_RUNNER_NAME
                " [--game <extracted-root>] [--module <path>]\n"
                "       [--user-dir <path>] [--title <text>]\n"
+               "       [--movie <dtm>]\n"
                "       [--graphics <backend>] [--audio <backend>]\n"
                "       [--symbols <path>] [--trace-functions | --trace-function <name>]\n"
+               "       [--idle-pc <address>]\n"
                "       [--widescreen] [-X11] [--headless]\n"
                "       [--allow-interpreter] [--allow-fallback]\n"
                "       With no --game, boots the path in <user-dir>/default-game.txt.\n";
+}
+
+std::uint32_t ParseAddress(const char* option, const char* text)
+{
+  try
+  {
+    std::size_t consumed = 0;
+    const unsigned long long value = std::stoull(text, &consumed, 0);
+    if (text[consumed] != '\0' || value > std::numeric_limits<std::uint32_t>::max())
+      throw std::out_of_range("address");
+    return static_cast<std::uint32_t>(value);
+  }
+  catch (const std::exception&)
+  {
+    std::cerr << option << " requires a 32-bit address (for example 0x800F2038)\n";
+    std::exit(2);
+  }
 }
 
 std::filesystem::path ReadDefaultGame(const std::filesystem::path& user_directory)
@@ -113,6 +134,8 @@ int main(int argc, char** argv)
       module_path = value("--module");
     else if (arg == "--user-dir")
       config.user_directory = value("--user-dir");
+    else if (arg == "--movie")
+      config.input_movie = value("--movie");
     else if (arg == "--title")
       config.window_title = value("--title");
     else if (arg == "--graphics")
@@ -125,6 +148,8 @@ int main(int argc, char** argv)
       config.debug.trace_functions = true;
     else if (arg == "--trace-function")
       config.debug.trace_function = value("--trace-function");
+    else if (arg == "--idle-pc")
+      config.debug.idle_pc = ParseAddress("--idle-pc", value("--idle-pc"));
     else if (arg == "--widescreen")
       config.graphics.force_widescreen = true;
     else if (arg == "-X11" || arg == "--x11")

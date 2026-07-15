@@ -26,6 +26,7 @@ struct BuildOptions
   std::string toolchain = "auto";
   fs::path output;
   fs::path module_patch;
+  bool fast_build = false;
   std::vector<std::string> runner_arguments;
 };
 
@@ -242,11 +243,12 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 #else
   constexpr std::string_view architecture = "unsupported";
 #endif
+  const bool lto_enabled = compiler == "clang" && !options.fast_build;
   std::string flags;
   if (compiler == "clang")
   {
-    flags = "compile:-O2 -flto=thin -fvisibility=hidden -ffp-contract=off -fno-fast-math "
-            "link:-flto=thin";
+    flags = "compile:-O2 -fvisibility=hidden -ffp-contract=off -fno-fast-math ";
+    flags += lto_enabled ? "-flto=thin link:-flto=thin" : "link:no-lto";
 #if defined(__linux__)
     flags += " -fuse-ld=lld";
 #endif
@@ -259,11 +261,12 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   {
     flags = "compile:/O2 /fp:strict";
   }
-  std::string identity = std::string(RECOMPCORE_REVISION) + "|dolrecomp=" +
+  const std::string build_identity = std::string(RECOMPCORE_REVISION) + "|dolrecomp=" +
       std::string(RECOMPCORE_REVISION) + "|module-abi=" +
       std::to_string(MODERNGEKKO_MODULE_ABI_VERSION) + "|cpu-abi=" +
       std::to_string(MODERNGEKKO_CPU_ABI_VERSION) + "|" + compiler_identity + "|" +
       std::string(architecture) + "|" + flags;
+  std::string identity = build_identity;
   std::ostringstream module_patch_id;
   if (!module_patch_contents.empty())
   {
@@ -276,7 +279,19 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   const std::string cache_key = game.dol_sha256 + "-" + key_tail.str();
   const fs::path artifact = options.output / game.disc_id / cache_key;
   const fs::path module = artifact / ("g" + game.disc_id + "_recomp" + Suffix());
-  const fs::path module_build = artifact / "module-build";
+  // Patch contents belong in the immutable published artifact key, but not in
+  // the mutable build workspace key. Reusing one workspace lets Ninja rebuild
+  // only module_patch.c after an iterative patch edit instead of recompiling
+  // every generated CPU chunk. Patched and unpatched source graphs stay apart.
+  const std::string workspace_identity =
+      build_identity + (module_patch_contents.empty() ? "|workspace=base-v1" :
+                                                        "|workspace=patched-v1");
+  std::ostringstream workspace_tail;
+  workspace_tail << std::hex << std::setfill('0') << std::setw(16)
+                 << Fnv1a(workspace_identity);
+  const fs::path workspace = options.output / game.disc_id / ".work" /
+                             (game.dol_sha256 + "-" + workspace_tail.str());
+  const fs::path module_build = workspace / "module-build";
   const fs::path built = module_build / ("g" + game.disc_id + "_recomp" + Suffix());
   if (fs::is_regular_file(module))
   {
@@ -305,26 +320,29 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     std::cout << "built module: " << module << '\n';
     return module;
   };
-  if (fs::is_regular_file(built))
-    return publish_module();
-
-  fs::create_directories(artifact);
-  const fs::path generated_parent = artifact / "dolrecomp-output";
-  const fs::path dolrecomp = SiblingExecutable(argv0, "dolrecomp");
-  std::string generate = Quote(dolrecomp) + " -j" +
-                         std::to_string(std::max(1u, std::thread::hardware_concurrency())) + " ";
-  if (game.platform == moderngekko::GamePlatform::GameCube)
-    generate += "--cpu gekko --gamecube " + Quote(game.main_dol) + " " + Quote(generated_parent);
-  else
-    generate += "--cpu broadway " + Quote(game.main_dol) + " " + game.disc_id + " " +
-                Quote(generated_parent);
-  if (!RunCommand(generate))
-    return std::nullopt;
-
+  fs::create_directories(workspace);
+  const fs::path generated_parent = workspace / "dolrecomp-output";
   fs::path generated = game.platform == moderngekko::GamePlatform::Wii ?
       generated_parent / (game.disc_id + "_generated") : generated_parent / "generated";
   std::string generated_stem =
       game.platform == moderngekko::GamePlatform::Wii ? game.disc_id : "generated";
+  const fs::path expected_header = generated / (generated_stem + ".h");
+  const fs::path fallback_header = generated_parent / "generated" / "generated.h";
+  const fs::path dolrecomp = SiblingExecutable(argv0, "dolrecomp");
+  if (!fs::is_regular_file(expected_header) && !fs::is_regular_file(fallback_header))
+  {
+    std::string generate = Quote(dolrecomp) + " -j" +
+                           std::to_string(std::max(1u, std::thread::hardware_concurrency())) + " ";
+    if (game.platform == moderngekko::GamePlatform::GameCube)
+      generate +=
+          "--cpu gekko --gamecube " + Quote(game.main_dol) + " " + Quote(generated_parent);
+    else
+      generate += "--cpu broadway " + Quote(game.main_dol) + " " + game.disc_id + " " +
+                  Quote(generated_parent);
+    if (!RunCommand(generate))
+      return std::nullopt;
+  }
+
   // DolRecomp's optional title database affects output naming only. An
   // explicit --cpu broadway keeps Wii semantics even when that database is absent.
   if (!fs::is_regular_file(generated / (generated_stem + ".h")) &&
@@ -367,6 +385,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
       Quote(source_root / "vendor/dolphin/module-template") +
       " -B " + Quote(module_build) + " -G Ninja -DCMAKE_BUILD_TYPE=Release" +
       " -DCMAKE_C_COMPILER=" + compiler + " -DGAME_ID=" + game.disc_id +
+      " -DMODERNGEKKO_ENABLE_LTO=" + std::string(lto_enabled ? "ON" : "OFF") +
       " -DGENERATED_DIR=" + Quote(generated) +
       " -DGXRUNTIME_DIR=" + Quote(source_root / "vendor/dolphin/GXRuntime") +
       " -DCHASSIS_ABI_DIR=" +
@@ -387,7 +406,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 void Usage()
 {
   std::cerr << "usage: moderngekko-port inspect <game-root>\n"
-               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c]\n"
+               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c] [--fast-build]\n"
                "       moderngekko-port run <game-root> [build options] [-- runner options]\n";
 }
 }  // namespace
@@ -416,6 +435,8 @@ int main(int argc, char** argv)
       options.output = argv[++i];
     else if (arg == "--module-patch" && i + 1 < argc)
       options.module_patch = argv[++i];
+    else if (arg == "--fast-build")
+      options.fast_build = true;
     else if (command == "run")
       options.runner_arguments.push_back(arg);
     else
