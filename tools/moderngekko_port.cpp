@@ -73,10 +73,56 @@ std::uint64_t Fnv1a(std::string_view value)
   return hash;
 }
 
+std::uint64_t Fnv1aAppend(std::uint64_t hash, std::string_view value)
+{
+  for (unsigned char c : value)
+    hash = (hash ^ c) * 0x100000001b3ULL;
+  return hash;
+}
+
+std::string HexFingerprint(std::uint64_t value)
+{
+  std::ostringstream out;
+  out << std::hex << std::setfill('0') << std::setw(16) << value;
+  return out.str();
+}
+
 std::string ReadFile(const fs::path& path)
 {
   std::ifstream file(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+}
+
+std::string FingerprintFile(const fs::path& path)
+{
+  if (!fs::is_regular_file(path))
+    return "missing";
+  return HexFingerprint(Fnv1a(ReadFile(path)));
+}
+
+std::string FingerprintTree(const fs::path& root)
+{
+  if (!fs::is_directory(root))
+    return "missing";
+
+  std::vector<fs::path> files;
+  for (const fs::directory_entry& entry : fs::recursive_directory_iterator(root))
+  {
+    if (entry.is_regular_file())
+      files.push_back(entry.path());
+  }
+  std::sort(files.begin(), files.end());
+
+  std::uint64_t hash = 0xcbf29ce484222325ULL;
+  for (const fs::path& path : files)
+  {
+    const std::string relative = fs::relative(path, root).generic_string();
+    hash = Fnv1aAppend(hash, relative);
+    hash = Fnv1aAppend(hash, std::string_view("\0", 1));
+    hash = Fnv1aAppend(hash, ReadFile(path));
+    hash = Fnv1aAppend(hash, std::string_view("\0", 1));
+  }
+  return HexFingerprint(hash);
 }
 
 std::string ReadCommand(const std::string& command)
@@ -271,6 +317,8 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   constexpr std::string_view architecture = "unsupported";
 #endif
   const bool lto_enabled = compiler == "clang" && !options.fast_build;
+  const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
+  const fs::path dolrecomp = SiblingExecutable(argv0, "dolrecomp");
   std::string flags;
   if (compiler == "clang")
   {
@@ -292,7 +340,11 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
       std::string(RECOMPCORE_REVISION) + "|module-abi=" +
       std::to_string(MODERNGEKKO_MODULE_ABI_VERSION) + "|cpu-abi=" +
       std::to_string(MODERNGEKKO_CPU_ABI_VERSION) + "|" + compiler_identity + "|" +
-      std::string(architecture) + "|" + flags + "|sparse-patch-dispatch=v1";
+      std::string(architecture) + "|" + flags + "|sparse-patch-dispatch=v1" +
+      "|dolrecomp-bin=" + FingerprintFile(dolrecomp) +
+      "|gxruntime-tree=" + FingerprintTree(source_root / "vendor/dolphin/GXRuntime") +
+      "|module-template-tree=" +
+      FingerprintTree(source_root / "vendor/dolphin/module-template");
   std::string identity = build_identity;
   std::ostringstream module_patch_id;
   std::ostringstream module_patch_addresses_id;
@@ -366,7 +418,6 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
       game.platform == moderngekko::GamePlatform::Wii ? game.disc_id : "generated";
   const fs::path expected_header = generated / (generated_stem + ".h");
   const fs::path fallback_header = generated_parent / "generated" / "generated.h";
-  const fs::path dolrecomp = SiblingExecutable(argv0, "dolrecomp");
   if (!fs::is_regular_file(expected_header) && !fs::is_regular_file(fallback_header))
   {
     std::string generate = Quote(dolrecomp) + " -j" +
@@ -422,7 +473,6 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     fs::remove(staged_module_patch_addresses, ec);
   }
 
-  const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
   const unsigned compile_jobs =
       std::min(8u, std::max(1u, std::thread::hardware_concurrency()));
   std::string configure = "cmake -E env CMAKE_NINJA_FORCE_RESPONSE_FILE=1 cmake -S " +
