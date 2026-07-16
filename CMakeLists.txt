@@ -383,11 +383,18 @@ if(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME)
     target_link_libraries(moderngekko-port PRIVATE ModernGekko::Runtime)
     target_compile_definitions(moderngekko-port PRIVATE
         MODERNGEKKO_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-    add_dependencies(moderngekko-port dolrecomp moderngekko-run)
-    add_custom_command(TARGET moderngekko-port POST_BUILD
+    # moderngekko-port resolves dolrecomp next to its own executable.  A
+    # POST_BUILD copy only runs when the port binary itself relinks, so an
+    # emitter-only rebuild could leave a stale staged dolrecomp in place and
+    # fingerprint/reuse the wrong generated module.  Keep staging as an
+    # explicit always-checked dependency instead.
+    add_custom_target(moderngekko-stage-dolrecomp
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "$<TARGET_FILE:dolrecomp>"
-                "$<TARGET_FILE_DIR:moderngekko-port>")
+                "$<TARGET_FILE_DIR:moderngekko-port>"
+        DEPENDS dolrecomp
+        COMMENT "Staging the current DolRecomp beside moderngekko-port")
+    add_dependencies(moderngekko-port moderngekko-stage-dolrecomp moderngekko-run)
 endif()
 
 if(BUILD_TESTING)
