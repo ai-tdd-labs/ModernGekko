@@ -347,11 +347,13 @@ int main(int argc, char** argv)
           {
             std::cerr << "invalid screenshot request: " << request << '\n';
             std::filesystem::remove(screenshot_request, ec);
+            screenshot_request.clear();
           }
           else if (error && error->code != moderngekko::RuntimeErrorCode::InvalidState)
           {
             std::cerr << "screenshot request failed: " << error->message << '\n';
             std::filesystem::remove(screenshot_request, ec);
+            screenshot_request.clear();
           }
           else if (!error)
           {
@@ -367,6 +369,10 @@ int main(int argc, char** argv)
               std::cout << "renderer screenshot requested: "
                         << screenshot_request.stem().string() << ".png\n";
             }
+            // --screenshot-request is a one-shot control. Once Dolphin owns
+            // the pending capture, stop polling the filesystem every 2 ms;
+            // the watcher must remain alive only to service stop signals.
+            screenshot_request.clear();
           }
         }
       }
