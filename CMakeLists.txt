@@ -461,6 +461,11 @@ if(BUILD_TESTING)
         COMMAND Python3::Interpreter
                 "${CMAKE_CURRENT_SOURCE_DIR}/vendor/dolphin/module-template/test_gen_module_patch_dispatch.py"
     )
+    add_test(
+        NAME moderngekko.opfuzz_runner
+        COMMAND Python3::Interpreter
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_run_opfuzz.py"
+    )
 
     add_executable(moderngekko_frontend_config_test
         tests/frontend_config_test.cpp
