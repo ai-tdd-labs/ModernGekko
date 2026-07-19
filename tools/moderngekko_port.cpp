@@ -24,7 +24,7 @@ namespace fs = std::filesystem;
 
 namespace
 {
-constexpr std::string_view RECOMPCORE_REVISION = "00ab4cb09a31ab8084d40f95b965cf9ebb759257";
+constexpr std::string_view RECOMPCORE_REVISION = "35e0b2687861fdf3a0be14f5d2ec91db5e7e2870";
 constexpr std::string_view DOLRECOMP_REVISION = "8bb8c8261cee8c6ac17b1b4e322f0efd65060dbb";
 
 struct BuildOptions

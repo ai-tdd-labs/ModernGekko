@@ -9,7 +9,7 @@ The Dolphin-derived runtime is pinned as the `vendor/dolphin` submodule:
 
 - Upstream repository: `https://github.com/ExpansionPak/RecompCore.git`
 - Layered fork: `https://github.com/ai-tdd-labs/RecompCore.git`
-- RecompCore revision: `00ab4cb09a31ab8084d40f95b965cf9ebb759257`
+- RecompCore revision: `35e0b2687861fdf3a0be14f5d2ec91db5e7e2870`
 - Branch used for local integration: `codex/upstream-layered-20260719`
 - Dolphin base immediately before StaticRecomp was introduced:
   `1ccbcaa04a95a5807d92429bf35598da345a3f16`
