@@ -85,6 +85,7 @@ struct RuntimeConfig
   bool headless = false;
   bool allow_interpreter = false;
   bool allow_fallback = false;
+  bool show_fps_in_title = true;
   std::optional<std::string> window_title;
 };
 

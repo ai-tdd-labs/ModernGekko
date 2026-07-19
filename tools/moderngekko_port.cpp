@@ -2,8 +2,12 @@
 #include "moderngekko/module_abi.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -13,13 +17,15 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace fs = std::filesystem;
 
 namespace
 {
-constexpr std::string_view RECOMPCORE_REVISION = "42a6bb23db8510fbcd34184bb54aa5679b05dd9b";
+constexpr std::string_view RECOMPCORE_REVISION = "00ab4cb09a31ab8084d40f95b965cf9ebb759257";
+constexpr std::string_view DOLRECOMP_REVISION = "8bb8c8261cee8c6ac17b1b4e322f0efd65060dbb";
 
 struct BuildOptions
 {
@@ -123,6 +129,190 @@ std::string FingerprintTree(const fs::path& root)
     hash = Fnv1aAppend(hash, std::string_view("\0", 1));
   }
   return HexFingerprint(hash);
+}
+
+std::string Trim(std::string value)
+{
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
+    value.erase(value.begin());
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
+    value.pop_back();
+  return value;
+}
+
+std::uint32_t ReadBE32(const std::uint8_t* data)
+{
+  return (std::uint32_t{data[0]} << 24) | (std::uint32_t{data[1]} << 16) |
+         (std::uint32_t{data[2]} << 8) | data[3];
+}
+
+void WriteBE32(std::uint8_t* data, std::uint32_t value)
+{
+  data[0] = static_cast<std::uint8_t>(value >> 24);
+  data[1] = static_cast<std::uint8_t>(value >> 16);
+  data[2] = static_cast<std::uint8_t>(value >> 8);
+  data[3] = static_cast<std::uint8_t>(value);
+}
+
+bool ParseHex32(std::string_view value, std::uint32_t* parsed)
+{
+  if (value.starts_with("0x") || value.starts_with("0X"))
+    value.remove_prefix(2);
+  const auto result = std::from_chars(value.data(), value.data() + value.size(), *parsed, 16);
+  return result.ec == std::errc{} && result.ptr == value.data() + value.size();
+}
+
+struct DolPatch
+{
+  std::uint32_t address;
+  std::uint32_t value;
+};
+
+struct DolPatchSet
+{
+  std::vector<DolPatch> entries;
+  std::string fingerprint = "none";
+  std::string error;
+
+  explicit operator bool() const { return error.empty(); }
+};
+
+DolPatchSet LoadDefaultDolPatches(const fs::path& path)
+{
+  std::ifstream input(path);
+  if (!input)
+    return {};
+
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(input, line))
+    lines.push_back(Trim(std::move(line)));
+
+  std::unordered_set<std::string> enabled;
+  std::string section;
+  for (const std::string& current : lines)
+  {
+    if (current.starts_with('[') && current.ends_with(']'))
+      section = current.substr(1, current.size() - 2);
+    else if (section == "OnFrame_Enabled" && current.starts_with('$'))
+      enabled.insert(current.substr(1));
+  }
+  if (enabled.empty())
+    return {};
+
+  DolPatchSet patches;
+  std::string patch_name;
+  for (const std::string& current : lines)
+  {
+    if (current.starts_with('[') && current.ends_with(']'))
+    {
+      section = current.substr(1, current.size() - 2);
+      patch_name.clear();
+      continue;
+    }
+    if (section != "OnFrame")
+      continue;
+    if (current.starts_with('$'))
+    {
+      patch_name = current.substr(1);
+      continue;
+    }
+    if (current.empty() || current.starts_with('#') || current.starts_with(';') ||
+        !enabled.contains(patch_name))
+      continue;
+
+    const std::size_t first = current.find(':');
+    const std::size_t second = current.find(':', first == std::string::npos ? first : first + 1);
+    if (first == std::string::npos || second == std::string::npos ||
+        current.find(':', second + 1) != std::string::npos ||
+        current.substr(first + 1, second - first - 1) != "dword")
+    {
+      patches.error = "unsupported enabled DOL patch line in " + path.string();
+      return patches;
+    }
+    DolPatch patch{};
+    if (!ParseHex32(std::string_view(current).substr(0, first), &patch.address) ||
+        !ParseHex32(std::string_view(current).substr(second + 1), &patch.value))
+    {
+      patches.error = "malformed enabled DOL patch line in " + path.string();
+      return patches;
+    }
+    patches.entries.push_back(patch);
+  }
+
+  std::ostringstream identity;
+  identity << std::hex << std::setfill('0');
+  for (const DolPatch& patch : patches.entries)
+    identity << std::setw(8) << patch.address << std::setw(8) << patch.value;
+  std::ostringstream fingerprint;
+  fingerprint << std::hex << std::setfill('0') << std::setw(16) << Fnv1a(identity.str());
+  patches.fingerprint = fingerprint.str();
+  return patches;
+}
+
+bool PatchDol(const fs::path& input_path, const fs::path& output_path,
+              const DolPatchSet& patches, std::string* error)
+{
+  std::ifstream input(input_path, std::ios::binary | std::ios::ate);
+  if (!input)
+  {
+    *error = "can't open " + input_path.string();
+    return false;
+  }
+  const std::streamoff input_size = input.tellg();
+  if (input_size < 0x100)
+  {
+    *error = "malformed DOL " + input_path.string();
+    return false;
+  }
+  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(input_size));
+  input.seekg(0);
+  if (!input.read(reinterpret_cast<char*>(bytes.data()), input_size))
+  {
+    *error = "can't read " + input_path.string();
+    return false;
+  }
+
+  for (const DolPatch& patch : patches.entries)
+  {
+    bool applied = false;
+    for (std::size_t section_index = 0; section_index < 18; ++section_index)
+    {
+      const std::uint32_t offset = ReadBE32(bytes.data() + section_index * 4);
+      const std::uint32_t address = ReadBE32(bytes.data() + 0x48 + section_index * 4);
+      const std::uint32_t size = ReadBE32(bytes.data() + 0x90 + section_index * 4);
+      if (patch.address < address ||
+          static_cast<std::uint64_t>(patch.address) + 4 >
+              static_cast<std::uint64_t>(address) + size)
+        continue;
+      const std::uint64_t patch_offset =
+          static_cast<std::uint64_t>(offset) + patch.address - address;
+      if (patch_offset + 4 > bytes.size())
+      {
+        *error = "DOL patch points outside the file";
+        return false;
+      }
+      WriteBE32(bytes.data() + patch_offset, patch.value);
+      applied = true;
+      break;
+    }
+    if (!applied)
+    {
+      std::ostringstream message;
+      message << "DOL patch address 0x" << std::hex << patch.address
+              << " is outside every section";
+      *error = message.str();
+      return false;
+    }
+  }
+
+  std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
+  if (!output || !output.write(reinterpret_cast<const char*>(bytes.data()), bytes.size()))
+  {
+    *error = "can't write " + output_path.string();
+    return false;
+  }
+  return true;
 }
 
 std::string ReadCommand(const std::string& command)
@@ -232,6 +422,14 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   const auto& game = *inspected.metadata;
   if (options.output.empty())
     options.output = DefaultOutput();
+  const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
+  const DolPatchSet patches = LoadDefaultDolPatches(
+      source_root / "vendor/dolphin/Data/Sys/GameSettings" / (game.disc_id + ".ini"));
+  if (!patches)
+  {
+    std::cerr << patches.error << '\n';
+    return std::nullopt;
+  }
 
   std::string module_patch_contents;
   std::string module_patch_addresses_contents;
@@ -317,7 +515,6 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   constexpr std::string_view architecture = "unsupported";
 #endif
   const bool lto_enabled = compiler == "clang" && !options.fast_build;
-  const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
   const fs::path dolrecomp = SiblingExecutable(argv0, "dolrecomp");
   std::string flags;
   if (compiler == "clang")
@@ -337,10 +534,11 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     flags = "compile:/O2 /fp:strict";
   }
   const std::string build_identity = std::string(RECOMPCORE_REVISION) + "|dolrecomp=" +
-      std::string(RECOMPCORE_REVISION) + "|module-abi=" +
+      std::string(DOLRECOMP_REVISION) + "|module-abi=" +
       std::to_string(MODERNGEKKO_MODULE_ABI_VERSION) + "|cpu-abi=" +
       std::to_string(MODERNGEKKO_CPU_ABI_VERSION) + "|" + compiler_identity + "|" +
       std::string(architecture) + "|" + flags + "|sparse-patch-dispatch=v1" +
+      "|patches=" + patches.fingerprint +
       "|dolrecomp-bin=" + FingerprintFile(dolrecomp) +
       "|gxruntime-tree=" + FingerprintTree(source_root / "vendor/dolphin/GXRuntime") +
       "|module-template-tree=" +
@@ -391,10 +589,13 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     std::ofstream manifest(artifact / "manifest.txt");
     manifest << "disc_id=" << game.disc_id << '\n' << "dol_sha256=" << game.dol_sha256 << '\n'
              << "recompcore_revision=" << RECOMPCORE_REVISION << '\n'
+             << "dolrecomp_revision=" << DOLRECOMP_REVISION << '\n'
              << "module_abi=" << MODERNGEKKO_MODULE_ABI_VERSION << '\n'
              << "cpu_abi=" << MODERNGEKKO_CPU_ABI_VERSION << '\n'
-             << "compiler=" << compiler_identity << "architecture=" << architecture << '\n'
+             << "compiler=" << compiler_identity << '\n'
+             << "architecture=" << architecture << '\n'
              << "flags=" << flags << '\n'
+             << "patches=" << patches.fingerprint << '\n'
              << "module_patch="
              << (module_patch_contents.empty() ? "none" : module_patch_id.str()) << '\n'
              << "module_patch_addresses="
@@ -410,7 +611,22 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     std::cout << "built module: " << module << '\n';
     return module;
   };
+  if (fs::is_regular_file(built))
+    return publish_module();
+
   fs::create_directories(workspace);
+  fs::path recomp_dol = game.main_dol;
+  if (!patches.entries.empty())
+  {
+    recomp_dol = workspace / "patched-main.dol";
+    std::string patch_error;
+    if (!PatchDol(game.main_dol, recomp_dol, patches, &patch_error))
+    {
+      std::cerr << patch_error << '\n';
+      return std::nullopt;
+    }
+    std::cout << "applied " << patches.entries.size() << " default DOL patches\n";
+  }
   const fs::path generated_parent = workspace / "dolrecomp-output";
   fs::path generated = game.platform == moderngekko::GamePlatform::Wii ?
       generated_parent / (game.disc_id + "_generated") : generated_parent / "generated";
@@ -424,9 +640,9 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
                            std::to_string(std::max(1u, std::thread::hardware_concurrency())) + " ";
     if (game.platform == moderngekko::GamePlatform::GameCube)
       generate +=
-          "--cpu gekko --gamecube " + Quote(game.main_dol) + " " + Quote(generated_parent);
+          "--cpu gekko --gamecube " + Quote(recomp_dol) + " " + Quote(generated_parent);
     else
-      generate += "--cpu broadway " + Quote(game.main_dol) + " " + game.disc_id + " " +
+      generate += "--cpu broadway " + Quote(recomp_dol) + " " + game.disc_id + " " +
                   Quote(generated_parent);
     if (!RunCommand(generate))
       return std::nullopt;
@@ -448,7 +664,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   }
   if (emitted_header.filename() != "generated.h")
     fs::copy_file(emitted_header, generated / "generated.h", fs::copy_options::overwrite_existing);
-  fs::copy_file(game.main_dol, generated / "main.dol", fs::copy_options::overwrite_existing);
+  fs::copy_file(recomp_dol, generated / "main.dol", fs::copy_options::overwrite_existing);
   const fs::path emitted_smc = generated / (generated_stem + "_smc.txt");
   const fs::path normalized_smc = generated / "generated_smc.txt";
   if (fs::is_regular_file(emitted_smc))
