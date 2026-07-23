@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define MODERNGEKKO_CPU_ABI_VERSION 2u
+#define MODERNGEKKO_CPU_ABI_VERSION 5u
 #define GXRUNTIME_CPU_ABI_VERSION MODERNGEKKO_CPU_ABI_VERSION
 
 typedef struct CPUState CPUState;
@@ -70,6 +70,9 @@ struct CPUState
     int64_t downcount;
     uint8_t* exram;
     uint32_t exram_size;
+    int64_t dispatch_cycle_budget;
+    uint32_t idle_loop_requested;
+    uint32_t host_fp_control_cache;
 };
 
 #ifdef __cplusplus

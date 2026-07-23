@@ -33,6 +33,7 @@ struct BuildOptions
   unsigned jobs = 0;
   bool fast_build = false;
   bool max_optimization = false;
+  std::vector<std::string> hot_dol_chunks;
   std::vector<std::string> runner_arguments;
 };
 
@@ -376,6 +377,13 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   const bool lto_enabled = compiler == "clang" && options.max_optimization;
   const unsigned optimization_level =
       options.fast_build ? 0u : (options.max_optimization ? 2u : 1u);
+  std::string hot_dol_chunks;
+  for (const std::string& chunk : options.hot_dol_chunks)
+  {
+    if (!hot_dol_chunks.empty())
+      hot_dol_chunks += ';';
+    hot_dol_chunks += chunk;
+  }
   const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
   const fs::path dolrecomp = SiblingExecutable(argv0, "dolrecomp");
   const std::vector<fs::path> rel_files = CollectRelFiles(game.root / "files");
@@ -427,6 +435,8 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
       "|gxruntime-tree=" + FingerprintTree(source_root / "vendor/dolphin/GXRuntime") +
       "|module-template-tree=" +
       FingerprintTree(source_root / "vendor/dolphin/module-template");
+  if (!hot_dol_chunks.empty())
+    build_identity += "|hot-dol-chunks=" + hot_dol_chunks;
   if (rel_count != 0)
     build_identity += "|native-rels=" + rel_fingerprint +
                       "|rel-packaging=" + std::string(REL_PACKAGING_REVISION);
@@ -480,6 +490,8 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
              << "cpu_abi=" << MODERNGEKKO_CPU_ABI_VERSION << '\n'
              << "compiler=" << compiler_identity << "architecture=" << architecture << '\n'
              << "flags=" << flags << '\n'
+             << "hot_dol_chunks="
+             << (hot_dol_chunks.empty() ? "none" : hot_dol_chunks) << '\n'
              << "rel_count=" << rel_count << '\n'
              << "rel_archive_count=" << rel_archives.size() << '\n'
              << "rel_fingerprint=" << rel_fingerprint << '\n'
@@ -644,6 +656,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
       " -DMODERNGEKKO_FAST_BUILD=" + std::string(options.fast_build ? "ON" : "OFF") +
       " -DMODERNGEKKO_OPTIMIZATION_LEVEL=" +
       std::to_string(optimization_level) +
+      " -DMODERNGEKKO_HOT_DOL_CHUNKS=" + Quote(hot_dol_chunks) +
       " -DGENERATED_DIR=" + Quote(generated) +
       " -DGXRUNTIME_DIR=" + Quote(source_root / "vendor/dolphin/GXRuntime") +
       " -DCHASSIS_ABI_DIR=" +
@@ -664,7 +677,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 void Usage()
 {
   std::cerr << "usage: moderngekko-port inspect <game-root>\n"
-               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c --module-patch-addresses file.txt] [--jobs count] [--fast-build|--max-opt]\n"
+               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c --module-patch-addresses file.txt] [--jobs count] [--fast-build|--max-opt] [--hot-dol-chunk chunk.c]\n"
                "       moderngekko-port run <game-root> [build options] [-- runner options]\n";
 }
 }  // namespace
@@ -716,6 +729,18 @@ int main(int argc, char** argv)
       options.fast_build = true;
     else if (arg == "--max-opt")
       options.max_optimization = true;
+    else if (arg == "--hot-dol-chunk" && i + 1 < argc)
+    {
+      const std::string chunk = argv[++i];
+      const fs::path chunk_path(chunk);
+      if (chunk_path.filename() != chunk_path || !chunk.starts_with("chunk_") ||
+          !chunk.ends_with(".c"))
+      {
+        std::cerr << "--hot-dol-chunk must be a generated DOL chunk basename\n";
+        return 2;
+      }
+      options.hot_dol_chunks.push_back(chunk);
+    }
     else if (command == "run")
       options.runner_arguments.push_back(arg);
     else
