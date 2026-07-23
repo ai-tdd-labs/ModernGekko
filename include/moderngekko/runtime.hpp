@@ -76,6 +76,9 @@ struct RuntimeConfig
   std::filesystem::path game_root;
   std::filesystem::path user_directory;
   std::filesystem::path input_movie;
+  std::filesystem::path input_savestate;
+  std::filesystem::path record_movie;
+  std::filesystem::path save_state_on_exit;
   ModuleSource module;
   GraphicsSettings graphics;
   AudioSettings audio;

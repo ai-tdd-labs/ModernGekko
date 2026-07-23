@@ -39,7 +39,8 @@ void Usage()
   std::cerr << "usage: " MODERNGEKKO_RUNNER_NAME
                " [--game <extracted-root>] [--module <path>]\n"
                "       [--user-dir <path>] [--title <text>]\n"
-               "       [--movie <dtm>]\n"
+               "       [--movie <dtm> | --record-movie <dtm>]\n"
+               "       [--load-state <sav>] [--save-state-on-exit <sav>]\n"
                "       [--graphics <backend>] [--audio <backend>]\n"
                "       [--shader-compilation <sync|sync-ubershaders|async-ubershaders|async-skip>]\n"
                "       [--wait-for-shaders-before-starting]\n"
@@ -175,6 +176,12 @@ int main(int argc, char** argv)
       config.user_directory = value("--user-dir");
     else if (arg == "--movie")
       config.input_movie = value("--movie");
+    else if (arg == "--record-movie")
+      config.record_movie = value("--record-movie");
+    else if (arg == "--load-state")
+      config.input_savestate = value("--load-state");
+    else if (arg == "--save-state-on-exit")
+      config.save_state_on_exit = value("--save-state-on-exit");
     else if (arg == "--title")
       config.window_title = value("--title");
     else if (arg == "--graphics")

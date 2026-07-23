@@ -6,15 +6,19 @@
 #include "Core/Boot/BootManager.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Config/StaticRecompSettings.h"
+#include "Core/Config/WiimoteSettings.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Core.h"
 #include "Core/Host.h"
 #include "Core/HW/GBACore.h"
+#include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/Wiimote.h"
 #include "Core/Movie.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/PowerPC/StaticRecomp/StaticRecompCore.h"
 #include "Core/PowerPC/StaticRecomp/StaticRecompModuleSource.h"
+#include "Core/State.h"
 #include "Core/System.h"
 #include "DolphinNoGUI/Platform.h"
 #include "UICommon/UICommon.h"
@@ -23,8 +27,11 @@
 #include "moderngekko/module_loader.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <future>
 #include <mutex>
+#include <thread>
 #include <utility>
 
 namespace
@@ -38,6 +45,56 @@ std::mutex s_runtime_mutex;
 bool s_runtime_active = false;
 Platform* s_platform = nullptr;
 std::string s_window_title;
+
+bool EnsureOutputParent(const std::filesystem::path& path)
+{
+  if (path.empty() || path.parent_path().empty())
+    return true;
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  return !ec;
+}
+
+Movie::ControllerTypeArray GetMovieControllers()
+{
+  Movie::ControllerTypeArray controllers{};
+  for (int index = 0; index < 4; ++index)
+  {
+    const SerialInterface::SIDevices device =
+        Config::Get(Config::GetInfoForSIDevice(index));
+    if (device == SerialInterface::SIDEVICE_GC_GBA_EMULATED)
+      controllers[index] = Movie::ControllerType::GBA;
+    else if (SerialInterface::SIDevice_IsGCController(device))
+      controllers[index] = Movie::ControllerType::GC;
+  }
+  if (controllers == Movie::ControllerTypeArray{})
+    controllers[0] = Movie::ControllerType::GC;
+  return controllers;
+}
+
+Movie::WiimoteEnabledArray GetMovieWiimotes()
+{
+  Movie::WiimoteEnabledArray wiimotes{};
+  for (int index = 0; index < 4; ++index)
+  {
+    wiimotes[index] =
+        Config::Get(Config::GetInfoForWiimoteSource(index)) != WiimoteSource::None;
+  }
+  return wiimotes;
+}
+
+bool SaveStateSynchronously(Core::System& system, const std::filesystem::path& path)
+{
+  std::promise<void> queued;
+  std::future<void> queued_future = queued.get_future();
+  Core::RunOnCPUThread(system, [&system, path, &queued] {
+    State::SaveAs(system, path.string());
+    queued.set_value();
+  });
+  queued_future.wait();
+  UICommon::FlushUnsavedData();
+  return std::filesystem::is_regular_file(path);
+}
 }
 
 std::vector<std::string> Host_GetPreferredLocales() { return {}; }
@@ -122,6 +179,35 @@ RuntimeCreateResult Runtime::Create(RuntimeConfig config)
   if (!config.input_movie.empty() && !std::filesystem::is_regular_file(config.input_movie))
     return {{}, RuntimeError{RuntimeErrorCode::InitializationFailed,
                              "input movie not found: " + config.input_movie.string()}};
+  if (!config.input_savestate.empty() &&
+      !std::filesystem::is_regular_file(config.input_savestate))
+  {
+    return {{}, RuntimeError{RuntimeErrorCode::InitializationFailed,
+                             "savestate not found: " + config.input_savestate.string()}};
+  }
+  if (!config.input_movie.empty() && !config.record_movie.empty())
+  {
+    return {{}, RuntimeError{RuntimeErrorCode::InitializationFailed,
+                             "movie playback and recording cannot be active together"}};
+  }
+  if (!config.input_movie.empty() && !config.input_savestate.empty())
+  {
+    return {{}, RuntimeError{
+                    RuntimeErrorCode::InitializationFailed,
+                    "a DTM controls its own starting state; do not combine --movie and --load-state"}};
+  }
+  if (!EnsureOutputParent(config.record_movie))
+  {
+    return {{}, RuntimeError{RuntimeErrorCode::InitializationFailed,
+                             "cannot create movie output directory: " +
+                                 config.record_movie.parent_path().string()}};
+  }
+  if (!EnsureOutputParent(config.save_state_on_exit))
+  {
+    return {{}, RuntimeError{RuntimeErrorCode::InitializationFailed,
+                             "cannot create savestate output directory: " +
+                                 config.save_state_on_exit.parent_path().string()}};
+  }
 
   const ModernGekkoModuleRequirements requirements = {
       MODERNGEKKO_CPU_ABI_VERSION, static_cast<std::uint32_t>(sizeof(CPUState)),
@@ -308,6 +394,11 @@ RuntimeRunResult Runtime::Run()
     boot->boot_session_data.SetSavestateData(std::move(savestate_path),
                                              DeleteSavestateAfterBoot::No);
   }
+  else if (!m_impl->config.input_savestate.empty())
+  {
+    boot->boot_session_data.SetSavestateData(m_impl->config.input_savestate.string(),
+                                             DeleteSavestateAfterBoot::No);
+  }
   m_impl->state_hook = Core::AddOnStateChangedCallback([this](Core::State state) {
     if (state == Core::State::Uninitialized && m_impl->platform)
       m_impl->platform->Stop();
@@ -320,7 +411,64 @@ RuntimeRunResult Runtime::Run()
             RuntimeError{RuntimeErrorCode::BootFailed, "Dolphin could not boot sys/main.dol"}};
   }
   m_impl->booted = true;
+
+  std::string media_error;
+  if (!m_impl->config.record_movie.empty())
+  {
+    constexpr auto recording_start_timeout = std::chrono::seconds(30);
+    const auto deadline = std::chrono::steady_clock::now() + recording_start_timeout;
+    while (Core::GetState(Core::System::GetInstance()) == Core::State::Starting &&
+           std::chrono::steady_clock::now() < deadline)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    auto& movie = Core::System::GetInstance().GetMovie();
+    const std::filesystem::path movie_state =
+        m_impl->config.record_movie.string() + ".sav";
+    if (Core::GetState(Core::System::GetInstance()) != Core::State::Running ||
+        !SaveStateSynchronously(Core::System::GetInstance(), movie_state) ||
+        !movie.BeginRecordingInput(GetMovieControllers(), GetMovieWiimotes()))
+    {
+      media_error = "Dolphin could not capture the starting state or start input recording";
+      m_impl->platform->Stop();
+    }
+    else
+    {
+      std::fprintf(stderr, "[moderngekko] recording DTM: %s\n",
+                   m_impl->config.record_movie.string().c_str());
+    }
+  }
+
   m_impl->platform->MainLoop();
+
+  auto& system = Core::System::GetInstance();
+  auto& movie = system.GetMovie();
+  if (!m_impl->config.record_movie.empty() && movie.IsRecordingInput())
+  {
+    UICommon::FlushUnsavedData();
+    {
+      const Core::CPUThreadGuard guard(system);
+      movie.SaveRecording(m_impl->config.record_movie.string());
+      movie.EndPlayInput(false);
+    }
+    if (!std::filesystem::is_regular_file(m_impl->config.record_movie) ||
+        !std::filesystem::is_regular_file(m_impl->config.record_movie.string() + ".sav"))
+    {
+      media_error = "Dolphin did not finish the DTM/savestate recording";
+    }
+    else
+    {
+      std::fprintf(stderr, "[moderngekko] saved DTM: %s\n",
+                   m_impl->config.record_movie.string().c_str());
+    }
+  }
+  if (!m_impl->config.save_state_on_exit.empty() &&
+      !SaveStateSynchronously(system, m_impl->config.save_state_on_exit))
+  {
+    media_error = "Dolphin did not finish the requested savestate";
+  }
+
   Core::Stop(Core::System::GetInstance());
   std::string native_fallback_violation;
   if (const auto* static_core = dynamic_cast<const StaticRecompCore*>(
@@ -336,6 +484,11 @@ RuntimeRunResult Runtime::Run()
   {
     return {RuntimeExitReason::BootFailed,
             RuntimeError{RuntimeErrorCode::BootFailed, std::move(native_fallback_violation)}};
+  }
+  if (!media_error.empty())
+  {
+    return {RuntimeExitReason::BootFailed,
+            RuntimeError{RuntimeErrorCode::BootFailed, std::move(media_error)}};
   }
   return {};
 }
