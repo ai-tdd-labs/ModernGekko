@@ -1,5 +1,6 @@
 #include "moderngekko/game.hpp"
 #include "moderngekko/module_abi.h"
+#include "rel_source_archive.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -20,6 +22,7 @@ namespace fs = std::filesystem;
 namespace
 {
 constexpr std::string_view RECOMPCORE_REVISION = "42a6bb23db8510fbcd34184bb54aa5679b05dd9b";
+constexpr std::string_view REL_PACKAGING_REVISION = "combined-rarc-v2";
 
 struct BuildOptions
 {
@@ -27,7 +30,9 @@ struct BuildOptions
   fs::path output;
   fs::path module_patch;
   fs::path module_patch_addresses;
+  unsigned jobs = 0;
   bool fast_build = false;
+  bool max_optimization = false;
   std::vector<std::string> runner_arguments;
 };
 
@@ -121,6 +126,58 @@ std::string FingerprintTree(const fs::path& root)
     hash = Fnv1aAppend(hash, std::string_view("\0", 1));
     hash = Fnv1aAppend(hash, ReadFile(path));
     hash = Fnv1aAppend(hash, std::string_view("\0", 1));
+  }
+  return HexFingerprint(hash);
+}
+
+std::vector<fs::path> CollectRelFiles(const fs::path& root)
+{
+  std::vector<fs::path> files;
+  if (!fs::is_directory(root))
+    return files;
+
+  for (const fs::directory_entry& entry : fs::recursive_directory_iterator(root))
+  {
+    if (!entry.is_regular_file())
+      continue;
+    std::string extension = entry.path().extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension == ".rel")
+      files.push_back(entry.path());
+  }
+  std::sort(files.begin(), files.end());
+  return files;
+}
+
+std::string FingerprintRelSources(
+    const fs::path& root, const std::vector<fs::path>& files,
+    const std::vector<moderngekko::port::RelArchive>& archives)
+{
+  std::uint64_t hash = 0xcbf29ce484222325ULL;
+  for (const fs::path& path : files)
+  {
+    const std::string relative = fs::relative(path, root).generic_string();
+    hash = Fnv1aAppend(hash, "loose:");
+    hash = Fnv1aAppend(hash, relative);
+    hash = Fnv1aAppend(hash, std::string_view("\0", 1));
+    hash = Fnv1aAppend(hash, ReadFile(path));
+    hash = Fnv1aAppend(hash, std::string_view("\0", 1));
+  }
+  for (const auto& archive : archives)
+  {
+    const std::string relative = fs::relative(archive.path, root).generic_string();
+    for (const auto& rel : archive.rels)
+    {
+      hash = Fnv1aAppend(hash, "rarc:");
+      hash = Fnv1aAppend(hash, relative);
+      hash = Fnv1aAppend(hash, ":");
+      hash = Fnv1aAppend(hash, rel.name);
+      hash = Fnv1aAppend(hash, std::string_view("\0", 1));
+      hash = Fnv1aAppend(
+          hash, std::string_view(reinterpret_cast<const char*>(rel.bytes.data()), rel.bytes.size()));
+      hash = Fnv1aAppend(hash, std::string_view("\0", 1));
+    }
   }
   return HexFingerprint(hash);
 }
@@ -316,13 +373,36 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 #else
   constexpr std::string_view architecture = "unsupported";
 #endif
-  const bool lto_enabled = compiler == "clang" && !options.fast_build;
+  const bool lto_enabled = compiler == "clang" && options.max_optimization;
+  const unsigned optimization_level =
+      options.fast_build ? 0u : (options.max_optimization ? 2u : 1u);
   const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
   const fs::path dolrecomp = SiblingExecutable(argv0, "dolrecomp");
+  const std::vector<fs::path> rel_files = CollectRelFiles(game.root / "files");
+  std::vector<moderngekko::port::RelArchive> rel_archives;
+  std::string rel_archive_error;
+  if (!moderngekko::port::CollectRelArchives(game.root / "files", &rel_archives,
+                                             &rel_archive_error))
+  {
+    std::cerr << "failed to inspect REL archives: " << rel_archive_error << '\n';
+    return std::nullopt;
+  }
+  std::size_t archived_rel_count = 0;
+  for (const auto& archive : rel_archives)
+    archived_rel_count += archive.rels.size();
+  const std::size_t rel_count = rel_files.size() + archived_rel_count;
+  const std::string rel_fingerprint =
+      FingerprintRelSources(game.root, rel_files, rel_archives);
+  if (rel_count != 0)
+  {
+    std::cout << "REL sources: " << rel_files.size() << " loose + " << archived_rel_count
+              << " archived (" << rel_count << " total)\n";
+  }
   std::string flags;
   if (compiler == "clang")
   {
-    flags = "compile:-O2 -fvisibility=hidden -ffp-contract=off -fno-fast-math ";
+    flags = "compile:-O" + std::to_string(optimization_level) +
+            " -fvisibility=hidden -ffp-contract=off -fno-fast-math ";
     flags += lto_enabled ? "-flto=thin link:-flto=thin" : "link:no-lto";
 #if defined(__linux__)
     flags += " -fuse-ld=lld";
@@ -330,13 +410,15 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   }
   else if (compiler == "gcc")
   {
-    flags = "compile:-O2 -fvisibility=hidden -ffp-contract=off -fno-fast-math link:no-lto";
+    flags = "compile:-O" + std::to_string(optimization_level) +
+            " -fvisibility=hidden -ffp-contract=off -fno-fast-math link:no-lto";
   }
   else
   {
-    flags = "compile:/O2 /fp:strict";
+    flags = optimization_level == 0 ? "compile:/Od /fp:strict" :
+                                      "compile:/O2 /fp:strict";
   }
-  const std::string build_identity = std::string(RECOMPCORE_REVISION) + "|dolrecomp=" +
+  std::string build_identity = std::string(RECOMPCORE_REVISION) + "|dolrecomp=" +
       std::string(RECOMPCORE_REVISION) + "|module-abi=" +
       std::to_string(MODERNGEKKO_MODULE_ABI_VERSION) + "|cpu-abi=" +
       std::to_string(MODERNGEKKO_CPU_ABI_VERSION) + "|" + compiler_identity + "|" +
@@ -345,6 +427,9 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
       "|gxruntime-tree=" + FingerprintTree(source_root / "vendor/dolphin/GXRuntime") +
       "|module-template-tree=" +
       FingerprintTree(source_root / "vendor/dolphin/module-template");
+  if (rel_count != 0)
+    build_identity += "|native-rels=" + rel_fingerprint +
+                      "|rel-packaging=" + std::string(REL_PACKAGING_REVISION);
   std::string identity = build_identity;
   std::ostringstream module_patch_id;
   std::ostringstream module_patch_addresses_id;
@@ -395,6 +480,10 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
              << "cpu_abi=" << MODERNGEKKO_CPU_ABI_VERSION << '\n'
              << "compiler=" << compiler_identity << "architecture=" << architecture << '\n'
              << "flags=" << flags << '\n'
+             << "rel_count=" << rel_count << '\n'
+             << "rel_archive_count=" << rel_archives.size() << '\n'
+             << "rel_fingerprint=" << rel_fingerprint << '\n'
+             << "rel_packaging=" << REL_PACKAGING_REVISION << '\n'
              << "module_patch="
              << (module_patch_contents.empty() ? "none" : module_patch_id.str()) << '\n'
              << "module_patch_addresses="
@@ -430,6 +519,73 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
                   Quote(generated_parent);
     if (!RunCommand(generate))
       return std::nullopt;
+  }
+
+  const fs::path rel_complete_marker = generated_parent / ".native_rels_complete";
+  const std::string rel_marker_contents =
+      std::string(REL_PACKAGING_REVISION) + "\n" + rel_fingerprint;
+  if (rel_count != 0 &&
+      (!fs::is_regular_file(rel_complete_marker) ||
+       ReadFile(rel_complete_marker) != rel_marker_contents))
+  {
+    // A changed REL set must replace the previous catalog. Leaving a folder
+    // for a removed module behind would silently package stale native code.
+    std::error_code cleanup_error;
+    fs::remove(rel_complete_marker, cleanup_error);
+    cleanup_error.clear();
+    fs::remove_all(generated / "rels", cleanup_error);
+    if (cleanup_error)
+    {
+      std::cerr << "failed to clear stale REL output " << generated / "rels"
+                << ": " << cleanup_error.message() << '\n';
+      return std::nullopt;
+    }
+    const fs::path rel_input = generated_parent / "rel-input";
+    fs::remove_all(rel_input, cleanup_error);
+    if (cleanup_error)
+    {
+      std::cerr << "failed to clear staged REL input " << rel_input
+                << ": " << cleanup_error.message() << '\n';
+      return std::nullopt;
+    }
+    const fs::path loose_input = rel_input / "loose";
+    for (const fs::path& source : rel_files)
+    {
+      const fs::path relative = fs::relative(source, game.root / "files");
+      const fs::path destination = loose_input / relative;
+      fs::create_directories(destination.parent_path(), cleanup_error);
+      if (!cleanup_error)
+      {
+        fs::copy_file(source, destination, fs::copy_options::overwrite_existing,
+                      cleanup_error);
+      }
+      if (cleanup_error)
+      {
+        std::cerr << "failed to stage loose REL " << source
+                  << ": " << cleanup_error.message() << '\n';
+        return std::nullopt;
+      }
+    }
+    if (!moderngekko::port::ExtractRelArchives(rel_archives, rel_input / "archives",
+                                               &rel_archive_error))
+    {
+      std::cerr << "failed to extract REL archives: " << rel_archive_error << '\n';
+      return std::nullopt;
+    }
+    const std::string generate_rels =
+        Quote(dolrecomp) + " -j" +
+        std::to_string(std::max(1u, std::thread::hardware_concurrency())) +
+        " --cpu gekko --gamecube " + Quote(rel_input) + " " +
+        Quote(generated_parent);
+    if (!RunCommand(generate_rels))
+      return std::nullopt;
+    std::ofstream marker(rel_complete_marker, std::ios::binary | std::ios::trunc);
+    marker << rel_marker_contents;
+    if (!marker)
+    {
+      std::cerr << "failed to write REL completion marker " << rel_complete_marker << '\n';
+      return std::nullopt;
+    }
   }
 
   // DolRecomp's optional title database affects output naming only. An
@@ -473,13 +629,21 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     fs::remove(staged_module_patch_addresses, ec);
   }
 
+  // Large generated chunks can make each Clang process consume substantial
+  // memory.  A conservative default avoids swap storms on 8 GiB systems;
+  // callers with more memory can opt into wider parallelism.
   const unsigned compile_jobs =
-      std::min(8u, std::max(1u, std::thread::hardware_concurrency()));
+      options.jobs != 0
+          ? options.jobs
+          : std::min(4u, std::max(1u, std::thread::hardware_concurrency()));
   std::string configure = "cmake -E env CMAKE_NINJA_FORCE_RESPONSE_FILE=1 cmake -S " +
       Quote(source_root / "vendor/dolphin/module-template") +
       " -B " + Quote(module_build) + " -G Ninja -DCMAKE_BUILD_TYPE=Release" +
       " -DCMAKE_C_COMPILER=" + compiler + " -DGAME_ID=" + game.disc_id +
       " -DMODERNGEKKO_ENABLE_LTO=" + std::string(lto_enabled ? "ON" : "OFF") +
+      " -DMODERNGEKKO_FAST_BUILD=" + std::string(options.fast_build ? "ON" : "OFF") +
+      " -DMODERNGEKKO_OPTIMIZATION_LEVEL=" +
+      std::to_string(optimization_level) +
       " -DGENERATED_DIR=" + Quote(generated) +
       " -DGXRUNTIME_DIR=" + Quote(source_root / "vendor/dolphin/GXRuntime") +
       " -DCHASSIS_ABI_DIR=" +
@@ -500,7 +664,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 void Usage()
 {
   std::cerr << "usage: moderngekko-port inspect <game-root>\n"
-               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c --module-patch-addresses file.txt] [--fast-build]\n"
+               "       moderngekko-port build <game-root> [--toolchain auto|clang|gcc|msvc] [--output path] [--module-patch file.c --module-patch-addresses file.txt] [--jobs count] [--fast-build|--max-opt]\n"
                "       moderngekko-port run <game-root> [build options] [-- runner options]\n";
 }
 }  // namespace
@@ -531,8 +695,27 @@ int main(int argc, char** argv)
       options.module_patch = argv[++i];
     else if (arg == "--module-patch-addresses" && i + 1 < argc)
       options.module_patch_addresses = argv[++i];
+    else if (arg == "--jobs" && i + 1 < argc)
+    {
+      try
+      {
+        const std::string value = argv[++i];
+        std::size_t consumed = 0;
+        const unsigned long parsed = std::stoul(value, &consumed);
+        if (consumed != value.size() || parsed == 0 || parsed > 128)
+          throw std::out_of_range("jobs");
+        options.jobs = static_cast<unsigned>(parsed);
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "--jobs must be an integer from 1 through 128\n";
+        return 2;
+      }
+    }
     else if (arg == "--fast-build")
       options.fast_build = true;
+    else if (arg == "--max-opt")
+      options.max_optimization = true;
     else if (command == "run")
       options.runner_arguments.push_back(arg);
     else
@@ -540,6 +723,11 @@ int main(int argc, char** argv)
       std::cerr << "unknown or incomplete option: " << arg << '\n';
       return 2;
     }
+  }
+  if (options.fast_build && options.max_optimization)
+  {
+    std::cerr << "--fast-build and --max-opt are mutually exclusive\n";
+    return 2;
   }
   if (options.output.empty())
     options.output = DefaultOutput();

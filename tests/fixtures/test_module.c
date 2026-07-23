@@ -19,7 +19,7 @@ static const uint64_t chunk_hashes[] = {
 static const ModernGekkoChunkFn chunk_functions[] = {chunk};
 
 static const ModernGekkoModuleDesc descriptor = {
-    MODERNGEKKO_MODULE_ABI_VERSION,
+    MODERNGEKKO_MODULE_ABI_VERSION_V3,
     2u,
     (uint32_t)sizeof(CPUState),
     "TEST01",
@@ -34,6 +34,8 @@ static const ModernGekkoModuleDesc descriptor = {
     1u,
     chunk_hashes,
     chunk_functions,
+    0,
+    0u,
 };
 
 MODERNGEKKO_MODULE_EXPORT const ModernGekkoModuleDesc* staticrecomp_get_module(void)

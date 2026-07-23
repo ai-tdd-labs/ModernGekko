@@ -40,5 +40,6 @@ int main(int argc, char** argv)
   std::cout << "code_ranges=" << descriptor.num_code_ranges << '\n';
   std::cout << "smc_ranges=" << descriptor.num_smc_ranges << '\n';
   std::cout << "chunk_ranges=" << descriptor.num_chunk_ranges << '\n';
+  std::cout << "rel_modules=" << descriptor.num_rel_modules << '\n';
   return 0;
 }

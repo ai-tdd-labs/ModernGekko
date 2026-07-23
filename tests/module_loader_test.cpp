@@ -32,6 +32,8 @@ const ModernGekkoModuleDesc attached_descriptor = {
     1u,
     hashes,
     chunk_functions,
+    nullptr,
+    0u,
 };
 }
 

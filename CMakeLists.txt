@@ -379,7 +379,10 @@ if(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME)
     endif()
     add_dependencies(moderngekko-launcher moderngekko-run)
 
-    add_executable(moderngekko-port tools/moderngekko_port.cpp)
+    add_executable(moderngekko-port
+        tools/moderngekko_port.cpp
+        tools/rel_source_archive.cpp)
+    target_include_directories(moderngekko-port PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tools")
     target_link_libraries(moderngekko-port PRIVATE ModernGekko::Runtime)
     target_compile_definitions(moderngekko-port PRIVATE
         MODERNGEKKO_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -404,6 +407,15 @@ if(BUILD_TESTING)
         COMMAND Python3::Interpreter
                 "${CMAKE_CURRENT_SOURCE_DIR}/vendor/dolphin/module-template/test_gen_module_patch_dispatch.py"
     )
+
+    add_executable(moderngekko_rel_source_archive_test
+        tests/rel_source_archive_test.cpp
+        tools/rel_source_archive.cpp)
+    target_include_directories(moderngekko_rel_source_archive_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tools")
+    target_compile_features(moderngekko_rel_source_archive_test PRIVATE cxx_std_23)
+    add_test(NAME moderngekko.rel_source_archive
+             COMMAND moderngekko_rel_source_archive_test)
 
     add_executable(moderngekko_game_inspect_test tests/game_inspect_test.cpp)
     target_link_libraries(moderngekko_game_inspect_test PRIVATE ModernGekko::LegacyRuntime)
@@ -448,6 +460,15 @@ if(BUILD_TESTING)
                      moderngekko_missing_export_module)
     add_test(NAME moderngekko.module_loader
              COMMAND moderngekko_module_loader_test)
+
+    add_executable(moderngekko_module_rel_binding_test
+        tests/module_rel_binding_test.cpp
+    )
+    target_link_libraries(moderngekko_module_rel_binding_test
+        PRIVATE ModernGekko::LegacyRuntime
+    )
+    add_test(NAME moderngekko.module_rel_binding
+             COMMAND moderngekko_module_rel_binding_test)
 
     add_executable(moderngekko_cpu_primitives_test
         tests/cpu_primitives_test.cpp

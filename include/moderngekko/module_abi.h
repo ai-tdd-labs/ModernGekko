@@ -9,7 +9,9 @@
 extern "C" {
 #endif
 
-#define MODERNGEKKO_MODULE_ABI_VERSION 3u
+#define MODERNGEKKO_MODULE_ABI_VERSION 4u
+#define MODERNGEKKO_MODULE_ABI_VERSION_V3 3u
+#define MODERNGEKKO_MODULE_ABI_VERSION_V4 MODERNGEKKO_MODULE_ABI_VERSION
 #define MODERNGEKKO_GET_MODULE_SYMBOL "staticrecomp_get_module"
 
 #if defined(_WIN32)
@@ -25,6 +27,29 @@ typedef struct ModernGekkoRange
     uint32_t start;
     uint32_t end;
 } ModernGekkoRange;
+
+typedef void (*ModernGekkoRelChunkFn)(CPUState* state, uint32_t canonical_pc,
+                                      intptr_t section_delta);
+
+typedef struct ModernGekkoRelExecutableSection
+{
+    uint32_t section_index;
+    uint32_t offset;
+    uint32_t size;
+    uint32_t canonical_start;
+    const ModernGekkoRange* chunk_ranges;
+    uint32_t num_chunk_ranges;
+    const uint64_t* chunk_hashes;
+    const uint64_t* chunk_hash_masks;
+    const ModernGekkoRelChunkFn* chunk_functions;
+} ModernGekkoRelExecutableSection;
+
+typedef struct ModernGekkoRelModuleDesc
+{
+    uint32_t module_id;
+    const ModernGekkoRelExecutableSection* executable_sections;
+    uint32_t num_executable_sections;
+} ModernGekkoRelModuleDesc;
 
 typedef void (*ModernGekkoChunkFn)(CPUState* state);
 
@@ -47,6 +72,9 @@ typedef struct ModernGekkoModuleDesc
     uint32_t num_chunk_ranges;
     const uint64_t* chunk_hashes;
     const ModernGekkoChunkFn* chunk_functions;
+
+    const ModernGekkoRelModuleDesc* rel_modules;
+    uint32_t num_rel_modules;
 } ModernGekkoModuleDesc;
 
 typedef const ModernGekkoModuleDesc* (*ModernGekkoGetModuleFn)(void);
@@ -62,6 +90,9 @@ typedef struct ModernGekkoHostEvent
 typedef bool (*ModernGekkoTakeHostEventFn)(ModernGekkoHostEvent* event);
 
 typedef ModernGekkoRange StaticRecompRange;
+typedef ModernGekkoRelChunkFn StaticRecompRelChunkFn;
+typedef ModernGekkoRelExecutableSection StaticRecompRelExecutableSection;
+typedef ModernGekkoRelModuleDesc StaticRecompRelModuleDesc;
 typedef ModernGekkoChunkFn StaticRecompChunkFn;
 typedef ModernGekkoModuleDesc StaticRecompModuleDesc;
 typedef ModernGekkoGetModuleFn StaticRecompGetModuleFn;
