@@ -45,6 +45,7 @@ void Usage()
                "       [--shader-compilation <sync|sync-ubershaders|async-ubershaders|async-skip>]\n"
                "       [--wait-for-shaders-before-starting]\n"
                "       [--symbols <path>] [--function-profile <path>]\n"
+               "       [--function-profile-start-frame <frame>] [--function-profile-end-frame <frame>]\n"
                "       [--trace-functions | --trace-function <name>]\n"
                "       [--idle-pc <address>]\n"
                "       [--screenshot-request <path>]\n"
@@ -66,6 +67,23 @@ std::uint32_t ParseAddress(const char* option, const char* text)
   catch (const std::exception&)
   {
     std::cerr << option << " requires a 32-bit address (for example 0x800F2038)\n";
+    std::exit(2);
+  }
+}
+
+std::uint64_t ParseFrame(const char* option, const char* text)
+{
+  try
+  {
+    std::size_t consumed = 0;
+    const unsigned long long value = std::stoull(text, &consumed, 0);
+    if (text[consumed] != '\0')
+      throw std::out_of_range("frame");
+    return static_cast<std::uint64_t>(value);
+  }
+  catch (const std::exception&)
+  {
+    std::cerr << option << " requires a non-negative movie-frame number\n";
     std::exit(2);
   }
 }
@@ -198,6 +216,12 @@ int main(int argc, char** argv)
       config.debug.symbol_map = value("--symbols");
     else if (arg == "--function-profile")
       config.debug.function_profile = value("--function-profile");
+    else if (arg == "--function-profile-start-frame")
+      config.debug.function_profile_start_frame =
+          ParseFrame("--function-profile-start-frame", value("--function-profile-start-frame"));
+    else if (arg == "--function-profile-end-frame")
+      config.debug.function_profile_end_frame =
+          ParseFrame("--function-profile-end-frame", value("--function-profile-end-frame"));
     else if (arg == "--trace-functions")
       config.debug.trace_functions = true;
     else if (arg == "--trace-function")

@@ -62,6 +62,8 @@ struct DebugSettings
   // Opt-in aggregate report of guest function entries. This is intentionally
   // separate from the verbose per-entry tracer so a real replay remains usable.
   std::filesystem::path function_profile;
+  std::optional<std::uint64_t> function_profile_start_frame;
+  std::optional<std::uint64_t> function_profile_end_frame;
   bool trace_functions = false;
   std::string trace_function;
   std::optional<std::uint32_t> idle_pc;
