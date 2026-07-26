@@ -59,6 +59,9 @@ struct InputSettings
 struct DebugSettings
 {
   std::filesystem::path symbol_map;
+  // Opt-in aggregate report of guest function entries. This is intentionally
+  // separate from the verbose per-entry tracer so a real replay remains usable.
+  std::filesystem::path function_profile;
   bool trace_functions = false;
   std::string trace_function;
   std::optional<std::uint32_t> idle_pc;

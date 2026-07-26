@@ -44,7 +44,8 @@ void Usage()
                "       [--graphics <backend>] [--audio <backend>]\n"
                "       [--shader-compilation <sync|sync-ubershaders|async-ubershaders|async-skip>]\n"
                "       [--wait-for-shaders-before-starting]\n"
-               "       [--symbols <path>] [--trace-functions | --trace-function <name>]\n"
+               "       [--symbols <path>] [--function-profile <path>]\n"
+               "       [--trace-functions | --trace-function <name>]\n"
                "       [--idle-pc <address>]\n"
                "       [--screenshot-request <path>]\n"
                "       [--widescreen] [--show-fps] [-X11] [--headless]\n"
@@ -195,6 +196,8 @@ int main(int argc, char** argv)
       config.audio.backend = value("--audio");
     else if (arg == "--symbols")
       config.debug.symbol_map = value("--symbols");
+    else if (arg == "--function-profile")
+      config.debug.function_profile = value("--function-profile");
     else if (arg == "--trace-functions")
       config.debug.trace_functions = true;
     else if (arg == "--trace-function")

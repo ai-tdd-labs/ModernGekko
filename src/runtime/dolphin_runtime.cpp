@@ -323,6 +323,8 @@ RuntimeCreateResult Runtime::Create(RuntimeConfig config)
   Config::SetCurrent(Config::MAIN_INPUT_BACKGROUND_INPUT, impl->config.input.background_input);
   Config::SetCurrent(Config::MAIN_STATICRECOMP_SYMBOL_MAP,
                      impl->config.debug.symbol_map.string());
+  Config::SetCurrent(Config::MAIN_STATICRECOMP_FUNCTION_PROFILE,
+                     impl->config.debug.function_profile.string());
   Config::SetCurrent(Config::MAIN_STATICRECOMP_TRACE_FUNCTIONS,
                      impl->config.debug.trace_functions);
   Config::SetCurrent(Config::MAIN_STATICRECOMP_TRACE_FUNCTION,
